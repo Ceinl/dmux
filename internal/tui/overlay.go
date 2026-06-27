@@ -79,63 +79,6 @@ func (u *connUI) startOverlay(ov *overlay) {
 	u.renderOverlay()
 }
 
-// feedOverlay handles a key while an overlay owns the screen (M6.6).
-func (u *connUI) feedOverlay(b byte) {
-	u.mu.Lock()
-	ov := u.overlay
-	u.mu.Unlock()
-	if ov == nil {
-		u.setMode(modeStream)
-		return
-	}
-
-	switch ov.escState {
-	case 1:
-		if b == '[' {
-			ov.escState = 2
-			return
-		}
-		ov.escState = 0
-		u.closeOverlay() // lone ESC cancels
-		return
-	case 2:
-		ov.escState = 0
-		switch b {
-		case 'A':
-			ov.move(-1)
-		case 'B':
-			ov.move(1)
-		}
-		u.renderOverlay()
-		return
-	}
-
-	switch b {
-	case 0x1b: // ESC — may begin an arrow sequence
-		ov.escState = 1
-	case '\r', '\n':
-		u.selectOverlay()
-	case 0x7f, 0x08: // backspace
-		if ov.query != "" {
-			ov.query = ov.query[:len(ov.query)-1]
-			ov.refilter()
-			u.renderOverlay()
-		}
-	case 0x0e: // Ctrl-N
-		ov.move(1)
-		u.renderOverlay()
-	case 0x10: // Ctrl-P
-		ov.move(-1)
-		u.renderOverlay()
-	default:
-		if b >= 0x20 && b < 0x7f {
-			ov.query += string(b)
-			ov.refilter()
-			u.renderOverlay()
-		}
-	}
-}
-
 // selectOverlay runs the highlighted entry's action and returns to streaming.
 func (u *connUI) selectOverlay() {
 	u.mu.Lock()
@@ -154,24 +97,14 @@ func (u *connUI) selectOverlay() {
 	}
 }
 
-// closeOverlay tears down the overlay and restores the session view.
+// closeOverlay tears down the overlay and repaints the component tree over the
+// raw overlay output.
 func (u *connUI) closeOverlay() {
 	u.mu.Lock()
 	u.overlay = nil
 	u.mode = modeStream
-	view := u.viewing
 	u.mu.Unlock()
-
-	if view != "" {
-		// Repaint the session: clear + replay scrollback.
-		u.clear()
-		if sb, ok := u.t.sessions.Scrollback(view); ok {
-			u.writeConn(sb.Snapshot())
-		}
-	} else {
-		u.clear()
-		u.writeString(splash)
-	}
+	u.forceFullRepaint()
 }
 
 // refilter recomputes the filtered index set from the query.

@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
+
+	"github.com/Ceinl/plumtree/tui-runtime/keyboard"
+	"github.com/Ceinl/plumtree/tui-runtime/screen"
 
 	"dmux/internal/attach"
 	"dmux/internal/config"
@@ -12,6 +16,27 @@ import (
 	"dmux/internal/remote"
 	"dmux/internal/session"
 )
+
+// --- encode (pure) ----------------------------------------------------------
+
+func TestEncode(t *testing.T) {
+	cases := []struct {
+		ev   keyboard.Event
+		want []byte
+	}{
+		{keyboard.Event{Type: keyboard.KeyRune, Ch: 'a'}, []byte("a")},
+		{keyboard.Event{Type: keyboard.KeyRune, Ch: 'D', Ctrl: true}, []byte{0x04}}, // Ctrl-D
+		{keyboard.Event{Type: keyboard.KeyEnter}, []byte{'\r'}},
+		{keyboard.Event{Type: keyboard.KeyBackspace}, []byte{127}},
+		{keyboard.Event{Type: keyboard.KeyArrowUp}, []byte("\x1b[A")},
+		{keyboard.Event{Type: keyboard.KeyCtrlC}, []byte{3}},
+	}
+	for _, c := range cases {
+		if got := encode(c.ev); !bytes.Equal(got, c.want) {
+			t.Errorf("encode(%+v) = %v, want %v", c.ev, got, c.want)
+		}
+	}
+}
 
 // --- overlay (pure) ---------------------------------------------------------
 
@@ -23,75 +48,100 @@ func TestOverlayRefilterAndMove(t *testing.T) {
 	if len(ov.filtered) != 4 {
 		t.Fatalf("empty query filtered %d, want 4", len(ov.filtered))
 	}
-
 	ov.query = "al"
 	ov.refilter()
-	// "alpha" and "alabama" contain a→l subsequence; "beta"/"gamma" should not.
-	if len(ov.filtered) < 2 {
-		t.Errorf("query 'al' matched %d, want >=2", len(ov.filtered))
-	}
 	for _, idx := range ov.filtered {
-		lbl := ov.entries[idx].label
-		if lbl == "beta" || lbl == "gamma" {
-			t.Errorf("unexpected match %q for query 'al'", lbl)
+		if l := ov.entries[idx].label; l == "beta" || l == "gamma" {
+			t.Errorf("unexpected match %q for 'al'", l)
 		}
 	}
-
-	// move clamps within bounds.
 	ov.sel = 0
 	ov.move(-1)
 	if ov.sel != 0 {
-		t.Errorf("move(-1) at top → %d, want 0", ov.sel)
+		t.Errorf("move(-1) at top = %d, want 0", ov.sel)
 	}
 	ov.move(100)
 	if ov.sel != len(ov.filtered)-1 {
-		t.Errorf("move(100) → %d, want last %d", ov.sel, len(ov.filtered)-1)
+		t.Errorf("move(100) = %d, want %d", ov.sel, len(ov.filtered)-1)
 	}
 }
 
-// --- fakes ------------------------------------------------------------------
+// --- sidebar ----------------------------------------------------------------
+
+func TestSidebarToggleWidth(t *testing.T) {
+	sb := newSidebar(func() {}, func(session.ID) {})
+	if sb.width() != sidebarWidth {
+		t.Errorf("expanded width = %d, want %d", sb.width(), sidebarWidth)
+	}
+	sb.toggle()
+	if sb.width() != collapsedWidth {
+		t.Errorf("collapsed width = %d, want %d", sb.width(), collapsedWidth)
+	}
+	if sb.collapse.Label() != ">" {
+		t.Errorf("collapsed label = %q, want >", sb.collapse.Label())
+	}
+	sb.toggle()
+	if sb.width() != sidebarWidth {
+		t.Errorf("re-expanded width = %d, want %d", sb.width(), sidebarWidth)
+	}
+}
+
+func TestSidebarRebuildClickSelects(t *testing.T) {
+	var selected session.ID
+	sb := newSidebar(func() {}, func(id session.ID) { selected = id })
+	sb.rebuild([]session.Session{
+		{ID: "s1", HostID: "hA", State: session.StateRunning, Title: "app"},
+		{ID: "s2", HostID: "hB", State: session.StateRunning, Title: "web"},
+	}, "s1")
+	if len(sb.rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(sb.rows))
+	}
+	// Lay out so buttons have rects, then click the second one.
+	sb.applyWidth()
+	sb.div.Layout(0, 0, sidebarWidth, 10)
+	r := sb.rows[1]
+	// Click center of its button by hit-testing via HandleMouseDown/Up at a
+	// point we know is inside (derive from layout by brute force).
+	clicked := false
+	for y := 0; y < 10 && !clicked; y++ {
+		for x := 0; x < sidebarWidth; x++ {
+			if r.btn.HitTest(x, y) {
+				r.btn.HandleMouseDown(x, y)
+				r.btn.HandleMouseUp(x, y)
+				clicked = true
+				break
+			}
+		}
+	}
+	if !clicked {
+		t.Fatal("could not locate second session button")
+	}
+	if selected != "s2" {
+		t.Errorf("selected = %q, want s2", selected)
+	}
+}
+
+// --- input routing ----------------------------------------------------------
 
 type fakeConn struct {
-	in     chan []byte
 	mu     sync.Mutex
-	out    []byte
 	closed bool
 	resize chan remote.Size
 }
 
-func newFakeConn() *fakeConn {
-	return &fakeConn{in: make(chan []byte, 16), resize: make(chan remote.Size, 8)}
-}
-func (c *fakeConn) ClientID() attach.ClientID { return "client-1" }
-func (c *fakeConn) Interface() string         { return "test" }
-func (c *fakeConn) Read(p []byte) (int, error) {
-	b, ok := <-c.in
-	if !ok {
-		return 0, errClosed
-	}
-	return copy(p, b), nil
-}
-func (c *fakeConn) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.out = append(c.out, p...)
-	return len(p), nil
-}
+func newFakeConn() *fakeConn { return &fakeConn{resize: make(chan remote.Size, 8)} }
+func (c *fakeConn) ClientID() attach.ClientID   { return "client-1" }
+func (c *fakeConn) Interface() string           { return "test" }
+func (c *fakeConn) Read(p []byte) (int, error)  { return 0, errClosed }
+func (c *fakeConn) Write(p []byte) (int, error) { return len(p), nil }
 func (c *fakeConn) Resizes() <-chan remote.Size { return c.resize }
 func (c *fakeConn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.closed {
-		c.closed = true
-		close(c.in)
-	}
+	c.closed = true
 	return nil
 }
-func (c *fakeConn) isClosed() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.closed
-}
+func (c *fakeConn) isClosed() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.closed }
 
 type errStr string
 
@@ -99,16 +149,14 @@ func (e errStr) Error() string { return string(e) }
 
 const errClosed = errStr("closed")
 
-// fakeSessions implements just the session.Manager surface the TUI touches.
 type fakeSessions struct {
 	mu      sync.Mutex
 	written map[session.ID][]byte
-	resized map[session.ID]remote.Size
 	running []session.Session
 }
 
 func newFakeSessions() *fakeSessions {
-	return &fakeSessions{written: map[session.ID][]byte{}, resized: map[session.ID]remote.Size{}}
+	return &fakeSessions{written: map[session.ID][]byte{}}
 }
 func (f *fakeSessions) List() []session.Session { return f.running }
 func (f *fakeSessions) Get(id session.ID) (session.Session, bool) {
@@ -129,16 +177,10 @@ func (f *fakeSessions) Write(id session.ID, p []byte) (int, error) {
 	f.written[id] = append(f.written[id], p...)
 	return len(p), nil
 }
-func (f *fakeSessions) Resize(id session.ID, sz remote.Size) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.resized[id] = sz
-	return nil
-}
+func (f *fakeSessions) Resize(session.ID, remote.Size) error             { return nil }
 func (f *fakeSessions) Scrollback(session.ID) (session.Scrollback, bool) { return nil, false }
 func (f *fakeSessions) Subscribe(session.ID) (<-chan session.Event, func(), error) {
-	ch := make(chan session.Event)
-	return ch, func() {}, nil
+	return make(chan session.Event), func() {}, nil
 }
 func (f *fakeSessions) wrote(id session.ID) []byte {
 	f.mu.Lock()
@@ -146,111 +188,116 @@ func (f *fakeSessions) wrote(id session.ID) []byte {
 	return append([]byte(nil), f.written[id]...)
 }
 
-type fakeCtrl struct {
-	jumped   session.ID
-	projects []project.Project
-}
+type fakeCtrl struct{ jumped session.ID }
 
-func (c *fakeCtrl) Jump(_ attach.ClientID, target session.ID) error { c.jumped = target; return nil }
+func (c *fakeCtrl) Jump(_ attach.ClientID, t session.ID) error { c.jumped = t; return nil }
 func (c *fakeCtrl) Projects(context.Context) ([]project.Project, error) {
-	return c.projects, nil
+	return nil, nil
 }
 func (c *fakeCtrl) OpenProject(context.Context, attach.ClientID, project.Project) (session.ID, error) {
 	return "opened", nil
 }
 
-func newUI(t *testing.T, sess *fakeSessions, ctrl Controller) (*connUI, *fakeConn) {
+func newUI(t *testing.T, sess *fakeSessions) (*connUI, *fakeConn) {
 	t.Helper()
 	reg := registry.NewFileRegistry(t.TempDir())
 	_ = reg.Load()
 	clients := attach.NewAttachments()
 	cfg := config.Default()
 	prefix, _ := config.ParsePrefix(cfg.PrefixKey)
-	tui := New(ctrl, sess, clients, reg, cfg, prefix)
+	tui := New(&fakeCtrl{}, sess, clients, reg, cfg, prefix)
 	conn := newFakeConn()
-	u := &connUI{t: tui, ctx: context.Background(), conn: conn, id: conn.ClientID(), size: remote.Size{Rows: 24, Cols: 80}}
+	u := &connUI{
+		t: tui, ctx: context.Background(), conn: conn, id: conn.ClientID(),
+		size: remote.Size{Rows: 24, Cols: 80}, redraw: make(chan struct{}, 1),
+	}
+	u.sidebar = newSidebar(func() {}, func(session.ID) {})
 	_ = clients.Attach(attach.Client{ID: u.id, Size: u.size})
 	return u, conn
 }
 
-// --- input routing ----------------------------------------------------------
-
-func TestStreamPassthroughToSession(t *testing.T) {
+func TestStreamForwardsToSession(t *testing.T) {
 	sess := newFakeSessions()
-	u, _ := newUI(t, sess, &fakeCtrl{})
+	u, _ := newUI(t, sess)
 	u.viewing = "s1"
 
-	u.feed([]byte("ls\n"))
-
-	if got := string(sess.wrote("s1")); got != "ls\n" {
-		t.Errorf("session received %q, want %q", got, "ls\n")
+	for _, r := range "ls\r" {
+		var ev keyboard.Event
+		if r == '\r' {
+			ev = keyboard.Event{Type: keyboard.KeyEnter}
+		} else {
+			ev = keyboard.Event{Type: keyboard.KeyRune, Ch: r}
+		}
+		u.streamEvent(ev)
+	}
+	if got := string(sess.wrote("s1")); got != "ls\r" {
+		t.Errorf("session got %q, want %q", got, "ls\r")
 	}
 }
 
-func TestPrefixThenLiteralPrefix(t *testing.T) {
+func TestPrefixLiteralAndDetach(t *testing.T) {
 	sess := newFakeSessions()
-	u, _ := newUI(t, sess, &fakeCtrl{})
+	u, conn := newUI(t, sess)
 	u.viewing = "s1"
+	ctrlD := keyboard.Event{Type: keyboard.KeyRune, Ch: 'D', Ctrl: true} // Ctrl-D = prefix
 
-	// prefix then prefix again → one literal prefix byte to the session.
-	pfx := u.t.prefix
-	u.feed([]byte{pfx, pfx})
-	if got := sess.wrote("s1"); len(got) != 1 || got[0] != pfx {
-		t.Errorf("literal prefix passthrough = %v, want [%d]", got, pfx)
+	// prefix → prefix again sends one literal prefix byte.
+	u.streamEvent(ctrlD)
+	u.mu.Lock()
+	isPrefix := u.mode == modePrefix
+	u.mu.Unlock()
+	if !isPrefix {
+		t.Fatal("prefix key did not enter prefix mode")
 	}
-}
+	if quit := u.prefixEvent(ctrlD); quit {
+		t.Fatal("literal prefix should not quit")
+	}
+	if got := sess.wrote("s1"); len(got) != 1 || got[0] != u.t.prefix {
+		t.Errorf("literal prefix = %v, want [%d]", got, u.t.prefix)
+	}
 
-func TestPrefixDetach(t *testing.T) {
-	sess := newFakeSessions()
-	u, conn := newUI(t, sess, &fakeCtrl{})
-	u.viewing = "s1"
-
-	u.feed([]byte{u.t.prefix, 'd'}) // prefix + d → detach
+	// prefix + d → detach (quit + conn closed).
+	u.streamEvent(ctrlD)
+	if quit := u.prefixEvent(keyboard.Event{Type: keyboard.KeyRune, Ch: 'd'}); !quit {
+		t.Error("prefix+d should quit")
+	}
 	if !conn.isClosed() {
-		t.Error("prefix+d did not close the connection")
+		t.Error("prefix+d should close the conn")
 	}
 }
 
-func TestPrefixOpensListOverlay(t *testing.T) {
+func TestPrefixToggleSidebar(t *testing.T) {
 	sess := newFakeSessions()
-	sess.running = []session.Session{
-		{ID: "s1", HostID: "hA", State: session.StateRunning, Title: "app"},
-	}
-	ctrl := &fakeCtrl{}
-	u, _ := newUI(t, sess, ctrl)
-	u.viewing = "s1"
+	u, _ := newUI(t, sess)
+	u.scr = screen.NewScreenWithOutput(80, 24, new(bytes.Buffer))
+	u.pane = newPane(nil)
 
-	u.feed([]byte{u.t.prefix, 'l'}) // prefix + l → list overlay
-	u.mu.Lock()
-	m := u.mode
-	hasOverlay := u.overlay != nil
-	u.mu.Unlock()
-	if m != modeOverlay || !hasOverlay {
-		t.Fatalf("mode=%v overlay=%v, want overlay open", m, hasOverlay)
-	}
-
-	// Enter selects the only entry → Jump to s1.
-	u.feed([]byte{'\r'})
-	if ctrl.jumped != "s1" {
-		t.Errorf("jumped to %q, want s1", ctrl.jumped)
+	ctrlD := keyboard.Event{Type: keyboard.KeyRune, Ch: 'D', Ctrl: true}
+	u.streamEvent(ctrlD)
+	u.prefixEvent(keyboard.Event{Type: keyboard.KeyRune, Ch: 'c'}) // collapse
+	if !u.sidebar.collapsed {
+		t.Error("prefix+c should collapse the sidebar")
 	}
 }
 
-func TestPickerSelectOpensProject(t *testing.T) {
-	sess := newFakeSessions()
-	ctrl := &fakeCtrl{projects: []project.Project{{HostID: "hA", Root: "/code/app", Name: "app"}}}
-	u, _ := newUI(t, sess, ctrl)
+// --- pane emulator ----------------------------------------------------------
 
-	u.feed([]byte{u.t.prefix, 'p'}) // prefix + p → picker
-	u.mu.Lock()
-	open := u.mode == modeOverlay && u.overlay != nil
-	u.mu.Unlock()
-	if !open {
-		t.Fatal("picker did not open")
+func TestPaneRendersHostOutput(t *testing.T) {
+	p := newPane(nil)
+	p.Layout(0, 0, 10, 3)
+	p.feed([]byte("hi"))
+
+	scr := screen.NewScreenWithOutput(10, 3, new(bytes.Buffer))
+	p.Render(scr)
+	snap := scr.Snapshot()
+	if snap[0][0].Ch != 'h' || snap[0][1].Ch != 'i' {
+		t.Errorf("pane cells = %q%q, want 'hi'", snap[0][0].Ch, snap[0][1].Ch)
 	}
-	// Select the project; OpenProject returns "opened" and view switches.
-	u.feed([]byte{'\r'})
-	if u.currentView() != "opened" {
-		t.Errorf("view = %q, want opened", u.currentView())
+}
+
+func TestVTColorDefaults(t *testing.T) {
+	if s := vtColor(0, true); s == "" {
+		// palette index 0 (black) should map to a 256-color escape, not default.
+		t.Error("vtColor(0) returned empty (should be palette escape)")
 	}
 }

@@ -370,6 +370,26 @@ Implements `sshd.Handler`. Drives rendering + input for each attached interface.
       hand-rolled ANSI renderer. Keep a first cut **minimal**: proxy one session,
       no sidebar/picker, then layer M6.2/M6.6.
 - [x] **Decided: hand-rolled ANSI.** Picker + list overlays implemented (not deferred).
+- [x] **v2 REWRITE — tmux-style sidebar (split, not overlay).** Now an always-visible
+      right sidebar with the main pane composited so they coexist (see note below).
+
+> **v2 impl notes (sidebar rewrite):** the main pane is now composited through a
+> **terminal emulator** (`github.com/hinshun/vt10x`) so the host's PTY stream is
+> contained to its rectangle and a sidebar can live beside live output — the
+> thing the overlay-only v1 couldn't do. Built on the **Plumtree tui-runtime**
+> (`github.com/Ceinl/plumtree/tui-runtime`, local `replace` in go.mod): its
+> `screen` diff-renderer targets the `sshd.Conn` via `NewScreenWithOutput`,
+> `Div`/`Button` give a flexbox `Row` = [pane(Grow) | sidebar(Px 26)], and
+> `keyboard.ListenReader(conn)` parses keys + SGR mouse. Files: `pane.go` (vt10x
+> Component), `sidebar.go` (clickable session `Button`s + collapse toggle),
+> `render.go` (event routing + frame render + key `encode`), `tui.go` (loop).
+> **Mouse:** click a session row → jump; click `< sessions` / `prefix c` →
+> collapse to a 1-col sliver. Keys forwarded to the shell are re-encoded from
+> decoded events (the parser drops raw bytes). **Live-verified over SSH**: shell
+> renders in the pane, sidebar shows the session row, no panic, clean detach.
+> **Bug found+fixed during verification:** host `Down` status was persisted and
+> survived restart, so auto-attach skipped the host forever — server now resets
+> status to Unknown on startup and marks Up on a successful dial.
 
 > **Impl notes (significant design deviation — read this):** new package
 > `internal/tui` (files `tui.go`, `stream.go`, `input.go`, `overlay.go`).

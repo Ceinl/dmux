@@ -92,6 +92,14 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.hosts.Load(); err != nil {
 		return fmt.Errorf("server: load registry: %w", err)
 	}
+	// Reachability is live state that does not survive a restart: a host marked
+	// Down by a previous run's connection drop must not stay Down forever. Reset
+	// every host to Unknown on startup; status is re-established on first dial.
+	for _, h := range s.hosts.List() {
+		if h.Status != registry.StatusUnknown {
+			_ = s.hosts.SetStatus(h.ID, registry.StatusUnknown)
+		}
+	}
 
 	errc := make(chan error, 1)
 	go func() { errc <- s.inbound.Serve(ctx, s.handler) }()
@@ -250,6 +258,8 @@ func (s *Server) OpenProject(ctx context.Context, c attach.ClientID, p project.P
 	if err != nil {
 		return "", fmt.Errorf("server: open project: %w", err)
 	}
+	// A successful dial proves the host is reachable.
+	_ = s.hosts.SetStatus(p.HostID, registry.StatusUp)
 	if err := s.Jump(c, id); err != nil {
 		return id, err
 	}

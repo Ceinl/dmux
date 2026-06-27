@@ -7,7 +7,11 @@ require (
 	golang.org/x/crypto v0.53.0
 )
 
+require github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
+
 require (
-	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02 // indirect
+	github.com/Ceinl/plumtree/tui-runtime v0.0.0
 	golang.org/x/sys v0.46.0 // indirect
 )
+
+replace github.com/Ceinl/plumtree/tui-runtime v0.0.0 => /Users/c/code/plumtree/tui-runtime
