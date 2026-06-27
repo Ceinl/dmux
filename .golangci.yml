@@ -1,0 +1,19 @@
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused
+    - gofmt
+    - goimports
+
+issues:
+  exclude-rules:
+    # Test files may ignore more errors for brevity.
+    - path: _test\.go
+      linters:
+        - errcheck
