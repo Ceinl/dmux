@@ -55,6 +55,35 @@ type setupOpts struct {
 	loginUser string // remote login user the server will use
 	dryRun    bool   // print commands instead of running them
 	portproxy bool   // attempt the elevated Windows netsh portproxy step (WSL NAT)
+	pm        pkgMgr // detected package manager + sshd service name
+}
+
+// pkgMgr describes how to install openssh on a distro and what its sshd service
+// is called. WSL ships many distros; the package name and service differ
+// (Debian/Ubuntu: openssh-server + service "ssh"; others: openssh + "sshd").
+type pkgMgr struct {
+	bin     string   // package-manager binary to look for in PATH
+	install []string // full install command (incl. the binary)
+	update  []string // optional index-refresh command run before install ("" = none)
+	service string   // sshd service name for service(8)/systemctl
+}
+
+// detectPkgMgr returns the first supported package manager found in PATH.
+func detectPkgMgr() (pkgMgr, bool) {
+	candidates := []pkgMgr{
+		{"apt-get", []string{"apt-get", "install", "-y", "openssh-server"}, []string{"apt-get", "update"}, "ssh"},
+		{"dnf", []string{"dnf", "install", "-y", "openssh-server"}, nil, "sshd"},
+		{"yum", []string{"yum", "install", "-y", "openssh-server"}, nil, "sshd"},
+		{"pacman", []string{"pacman", "-S", "--needed", "--noconfirm", "openssh"}, []string{"pacman", "-Sy", "--noconfirm"}, "sshd"},
+		{"zypper", []string{"zypper", "--non-interactive", "install", "openssh"}, nil, "sshd"},
+		{"apk", []string{"apk", "add", "openssh"}, []string{"apk", "update"}, "sshd"},
+	}
+	for _, c := range candidates {
+		if _, err := exec.LookPath(c.bin); err == nil {
+			return c, true
+		}
+	}
+	return pkgMgr{}, false
 }
 
 func runSetupWSL(_ context.Context, args []string) error {
@@ -88,6 +117,19 @@ func runSetupWSL(_ context.Context, args []string) error {
 	if !isWSL() {
 		return fmt.Errorf("setup wsl: this does not look like a WSL environment " +
 			"(no \"microsoft\" in /proc/version and no $WSL_DISTRO_NAME)")
+	}
+
+	pm, ok := detectPkgMgr()
+	if !ok {
+		return fmt.Errorf("setup wsl: no supported package manager found " +
+			"(apt-get/dnf/yum/pacman/zypper/apk); install openssh-server manually")
+	}
+	opts.pm = pm
+	if !isRoot() {
+		if _, err := exec.LookPath("sudo"); err != nil {
+			return fmt.Errorf("setup wsl: not running as root and no sudo found; " +
+				"re-run as root or install sudo")
+		}
 	}
 
 	fmt.Println("dmux setup wsl — preparing this machine as a dmux host")
@@ -190,17 +232,19 @@ func resolveServerKey(v string) (string, error) {
 	return v, nil
 }
 
-// stepInstallSSHD installs the openssh-server package via apt.
+// stepInstallSSHD installs openssh using the detected package manager.
 func stepInstallSSHD(o setupOpts) error {
-	if err := sh(o, "sudo", "apt-get", "update"); err != nil {
-		return err
+	if len(o.pm.update) > 0 {
+		if err := shRoot(o, o.pm.update[0], o.pm.update[1:]...); err != nil {
+			return err
+		}
 	}
-	return sh(o, "sudo", "apt-get", "install", "-y", "openssh-server")
+	return shRoot(o, o.pm.install[0], o.pm.install[1:]...)
 }
 
 // stepHostKeys regenerates any missing sshd host keys.
 func stepHostKeys(o setupOpts) error {
-	return sh(o, "sudo", "ssh-keygen", "-A")
+	return shRoot(o, "ssh-keygen", "-A")
 }
 
 // stepSSHDConfig drops a dmux-owned sshd config fragment enabling key-only auth
@@ -212,8 +256,8 @@ Port %d
 PubkeyAuthentication yes
 PasswordAuthentication no
 `, o.port)
-	// `sudo tee` so the redirect runs as root.
-	return shStdin(o, conf, "sudo", "tee", "/etc/ssh/sshd_config.d/dmux.conf")
+	// `tee` (as root) so the redirect lands in a root-owned dir.
+	return shRootStdin(o, conf, "tee", "/etc/ssh/sshd_config.d/dmux.conf")
 }
 
 // stepAuthorizeKey appends the server's public key to the login user's
@@ -251,13 +295,45 @@ func stepAuthorizeKey(o setupOpts) error {
 	return os.Chmod(authPath, 0o600)
 }
 
-// stepStartSSHD starts/restarts sshd, trying the service wrapper first (works on
-// non-systemd WSL) and falling back to systemctl.
+// stepStartSSHD starts/restarts sshd. WSL distros vary wildly in init: try the
+// service(8) wrapper first (works without systemd), then systemctl, then run the
+// daemon directly as a last resort for minimal distros with neither.
 func stepStartSSHD(o setupOpts) error {
-	if err := sh(o, "sudo", "service", "ssh", "restart"); err == nil {
+	svc := o.pm.service
+	if err := shRoot(o, "service", svc, "restart"); err == nil {
 		return nil
 	}
-	return sh(o, "sudo", "systemctl", "restart", "ssh")
+	if err := shRoot(o, "systemctl", "restart", svc); err == nil {
+		return nil
+	}
+	if path, err := exec.LookPath("sshd"); err == nil {
+		return shRoot(o, path)
+	}
+	return fmt.Errorf("could not start sshd via service, systemctl, or directly")
+}
+
+// isRoot reports whether we are already uid 0, in which case sudo is neither
+// needed nor (on minimal WSL images) present.
+func isRoot() bool { return os.Geteuid() == 0 }
+
+// elevate prefixes a command with sudo unless we are already root.
+func elevate(name string, args []string) (string, []string) {
+	if isRoot() {
+		return name, args
+	}
+	return "sudo", append([]string{name}, args...)
+}
+
+// shRoot runs a command as root (directly when uid 0, else via sudo).
+func shRoot(o setupOpts, name string, args ...string) error {
+	n, a := elevate(name, args)
+	return sh(o, n, a...)
+}
+
+// shRootStdin runs a command as root with stdin fed from in.
+func shRootStdin(o setupOpts, in, name string, args ...string) error {
+	n, a := elevate(name, args)
+	return shStdin(o, in, n, a...)
 }
 
 // stepNetworking inspects WSL's networking mode and prints what the server needs
