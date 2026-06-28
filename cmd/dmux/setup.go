@@ -56,6 +56,12 @@ type setupOpts struct {
 	dryRun    bool   // print commands instead of running them
 	portproxy bool   // attempt the elevated Windows netsh portproxy step (WSL NAT)
 	pm        pkgMgr // detected package manager + sshd service name
+
+	// discoveredIP is the local source address this host used to reach the
+	// server while fetching its key — the most reliable address to advertise
+	// back, since it's literally on the path between the two. Empty in the
+	// offline (--server-key) path.
+	discoveredIP string
 }
 
 // pkgMgr describes how to install openssh on a distro and what its sshd service
@@ -98,7 +104,7 @@ func runSetupWSL(_ context.Context, args []string) error {
 		return err
 	}
 
-	key, err := obtainServerKey(*server, *serverKey)
+	key, localIP, err := obtainServerKey(*server, *serverKey)
 	if err != nil {
 		return err
 	}
@@ -107,11 +113,12 @@ func runSetupWSL(_ context.Context, args []string) error {
 	}
 
 	opts := setupOpts{
-		serverKey: key,
-		port:      *port,
-		loginUser: *loginUser,
-		dryRun:    *dryRun,
-		portproxy: *portproxy,
+		serverKey:    key,
+		port:         *port,
+		loginUser:    *loginUser,
+		dryRun:       *dryRun,
+		portproxy:    *portproxy,
+		discoveredIP: localIP,
 	}
 
 	if !isWSL() {
@@ -162,27 +169,41 @@ func runSetupWSL(_ context.Context, args []string) error {
 // its inbound sshd and its outbound dials with the same keypair, so that key IS
 // what this host must trust. No copying, no secret. --server-key is an offline
 // fallback for when the host can't reach the server.
-func obtainServerKey(server, serverKey string) (string, error) {
+// obtainServerKey returns the authorized_keys line and the local source IP this
+// host used to reach the server (empty in the offline path).
+func obtainServerKey(server, serverKey string) (key, localIP string, err error) {
 	if server != "" {
 		addr := ensureServerPort(server)
-		key, err := fetchServerKey(addr)
+		key, localIP, err := fetchServerKey(addr)
 		if err != nil {
-			return "", fmt.Errorf("setup: fetch key from server %s: %w "+
+			return "", "", fmt.Errorf("setup: fetch key from server %s: %w "+
 				"(is the server running? otherwise pass --server-key)", addr, err)
 		}
 		fmt.Printf("    fetched server key from %s\n", addr)
-		return key, nil
+		return key, localIP, nil
 	}
 	if serverKey != "" {
-		return resolveServerKey(serverKey)
+		key, err := resolveServerKey(serverKey)
+		return key, "", err
 	}
-	return "", fmt.Errorf("setup: pass --server <addr> (recommended) or --server-key <key|@path>")
+	return "", "", fmt.Errorf("setup: pass --server <addr> (recommended) or --server-key <key|@path>")
 }
 
 // fetchServerKey opens an SSH handshake to the server and captures the host key
-// it presents, without completing auth. This is the ssh-keyscan technique: the
-// host-key callback fires before authentication, so we grab the key and abort.
-func fetchServerKey(addr string) (string, error) {
+// it presents, without completing auth (the ssh-keyscan technique: the host-key
+// callback fires before authentication, so we grab the key and abort). It dials
+// the TCP connection itself so it can also report the local source address —
+// the address this host should advertise back to the server.
+func fetchServerKey(addr string) (key, localIP string, err error) {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return "", "", err
+	}
+	defer conn.Close()
+	if tcp, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+		localIP = tcp.IP.String()
+	}
+
 	var captured ssh.PublicKey
 	errCaptured := fmt.Errorf("key captured")
 	cfg := &ssh.ClientConfig{
@@ -193,13 +214,20 @@ func fetchServerKey(addr string) (string, error) {
 		},
 		Timeout: 10 * time.Second,
 	}
-	if conn, err := ssh.Dial("tcp", addr, cfg); err == nil {
-		conn.Close()
+	// Aborts in the callback, so this returns an error and no usable conn.
+	if sc, chans, reqs, herr := ssh.NewClientConn(conn, addr, cfg); herr == nil {
+		go ssh.DiscardRequests(reqs)
+		go func() {
+			for ch := range chans {
+				_ = ch.Reject(ssh.Prohibited, "")
+			}
+		}()
+		sc.Close()
 	}
 	if captured == nil {
-		return "", fmt.Errorf("server presented no host key")
+		return "", "", fmt.Errorf("server presented no host key")
 	}
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(captured))), nil
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(captured))), localIP, nil
 }
 
 // ensureServerPort defaults the dmux server port (2222) when addr omits one.
@@ -336,47 +364,72 @@ func shRootStdin(o setupOpts, in, name string, args ...string) error {
 	return shStdin(o, in, n, a...)
 }
 
-// stepNetworking inspects WSL's networking mode and prints what the server needs
-// to reach this host, plus the final `dmux connect` line.
+// stepNetworking decides which address the server should dial. The most reliable
+// signal is the source IP this host used to reach the server (discoveredIP): if
+// it's a routable LAN address, the server can almost certainly reach it back; if
+// it's a WSL NAT address (172.16/12), the server can't, and we print the fixes.
+// Without server contact (offline --server-key) we fall back to interface probing.
 func stepNetworking(o setupOpts) error {
 	fmt.Println("→ networking")
-	ips := wslIPv4s()
-	mode := classifyNetworking(ips)
-	wslIP := firstNonLoopback(ips)
 
-	switch mode {
-	case netMirrored:
-		fmt.Printf("    mirrored networking detected — this host is reachable directly at %s\n", wslIP)
-		printConnect(o, wslIP)
-	case netNAT:
-		fmt.Printf("    NAT'd WSL2 network detected (WSL IP %s).\n", wslIP)
-		fmt.Println("    The server cannot reach this IP from the LAN. Two options:")
-		fmt.Println()
-		fmt.Println("    A) Mirrored networking (recommended, persistent across reboots):")
-		fmt.Println("       add to C:\\Users\\<you>\\.wslconfig on Windows:")
-		fmt.Println("         [wsl2]")
-		fmt.Println("         networkingMode=mirrored")
-		fmt.Println("       then run `wsl --shutdown` and re-run this command.")
-		fmt.Println()
-		fmt.Println("    B) Port-proxy (per-reboot; the WSL IP changes on restart). On Windows, elevated:")
-		fmt.Printf("         netsh interface portproxy add v4tov4 listenport=%d listenaddress=0.0.0.0 connectport=%d connectaddress=%s\n",
-			o.port, o.port, wslIP)
-		fmt.Printf("         netsh advfirewall firewall add rule name=\"dmux-ssh\" dir=in action=allow protocol=TCP localport=%d\n", o.port)
-		if o.portproxy {
-			if err := attemptPortproxy(o, wslIP); err != nil {
-				fmt.Printf("    portproxy attempt failed: %v\n", err)
-			}
-		} else {
-			fmt.Println("       (or re-run with --portproxy to attempt this via an elevated UAC prompt)")
+	if o.discoveredIP != "" {
+		if !isWSLNATAddr(o.discoveredIP) {
+			fmt.Printf("    this host reached the server from %s — using that as its address\n", o.discoveredIP)
+			printConnect(o, o.discoveredIP)
+			return nil
 		}
-		fmt.Println()
-		fmt.Println("    After either option, connect to the Windows host's LAN IP:")
-		printConnect(o, "<windows-lan-ip>")
-	default:
-		fmt.Printf("    could not classify networking; this host's WSL IP is %s\n", wslIP)
-		printConnect(o, wslIP)
+		printNATGuidance(o, o.discoveredIP)
+		return nil
 	}
+
+	ips := wslIPv4s()
+	wslIP := firstNonLoopback(ips)
+	if isWSLNATAddr(wslIP) || classifyNetworking(ips) == netNAT {
+		printNATGuidance(o, wslIP)
+		return nil
+	}
+	fmt.Printf("    this host appears reachable directly at %s\n", wslIP)
+	printConnect(o, wslIP)
 	return nil
+}
+
+// printNATGuidance explains how to make a NAT'd WSL2 host reachable and prints
+// the connect line. wslIP is the host's NAT address (the portproxy target).
+func printNATGuidance(o setupOpts, wslIP string) {
+	fmt.Printf("    NAT'd WSL2 network detected (WSL IP %s).\n", wslIP)
+	fmt.Println("    The server cannot reach this IP from the LAN. Two options:")
+	fmt.Println()
+	fmt.Println("    A) Mirrored networking (recommended, persistent across reboots):")
+	fmt.Println("       add to C:\\Users\\<you>\\.wslconfig on Windows:")
+	fmt.Println("         [wsl2]")
+	fmt.Println("         networkingMode=mirrored")
+	fmt.Println("       then run `wsl --shutdown` and re-run this command.")
+	fmt.Println()
+	fmt.Println("    B) Port-proxy (per-reboot; the WSL IP changes on restart). On Windows, elevated:")
+	fmt.Printf("         netsh interface portproxy add v4tov4 listenport=%d listenaddress=0.0.0.0 connectport=%d connectaddress=%s\n",
+		o.port, o.port, wslIP)
+	fmt.Printf("         netsh advfirewall firewall add rule name=\"dmux-ssh\" dir=in action=allow protocol=TCP localport=%d\n", o.port)
+	if o.portproxy {
+		if err := attemptPortproxy(o, wslIP); err != nil {
+			fmt.Printf("    portproxy attempt failed: %v\n", err)
+		}
+	} else {
+		fmt.Println("       (or re-run with --portproxy to attempt this via an elevated UAC prompt)")
+	}
+	fmt.Println()
+	fmt.Println("    After either option, connect to the Windows host's LAN IP:")
+	printConnect(o, "<windows-lan-ip>")
+}
+
+// isWSLNATAddr reports whether ip is in the 172.16/12 range WSL2 uses for its
+// NAT'd virtual network — addresses the server cannot reach from the LAN.
+func isWSLNATAddr(ip string) bool {
+	p := net.ParseIP(ip)
+	if p == nil {
+		return false
+	}
+	p4 := p.To4()
+	return p4 != nil && p4[0] == 172 && p4[1] >= 16 && p4[1] <= 31
 }
 
 // printConnect prints the server-side registration command for this host.
