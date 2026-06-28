@@ -96,23 +96,31 @@ key. `dmux setup <platform>` does that preparation **on the host**, then prints
 the `dmux connect …` line to run on the server. It is one-shot prep, not a daemon
 — nothing keeps running afterward (decision #1 holds).
 
-It can be run install-free with the Go toolchain (no dmux install on the host):
+The whole flow is three steps and copies no keys:
 
 ```
-go run github.com/Ceinl/dmux/cmd/dmux@latest setup wsl \
-    --server-key @<server-pubkey.pub>   # the server's <data-dir>/dmux_host_key.pub
-
-  # installs+configures sshd (key-only auth), authorizes the server key, starts
-  # sshd, then inspects WSL networking:
-  #   mirrored mode → prints the ready-to-run `dmux connect <wsl-ip>:<port>`.
-  #   NAT'd  (default WSL2) → the 172.x IP isn't LAN-reachable; it explains the
-  #     two fixes (mirrored mode, or an elevated netsh portproxy) and prints the
-  #     connect line against the Windows host's LAN IP.
+1. dmux serve                    # on the server; prints the exact setup command below
+2. go run github.com/Ceinl/dmux/cmd/dmux@latest setup wsl --server <server-addr>   # on each host
+3. dmux connect <host-addr>      # on the server (printed by step 2)
 ```
 
-Flags: `--port N` (sshd port), `--user U` (login user), `--portproxy` (attempt
-the elevated Windows portproxy step via a UAC prompt), `--dry-run` (print every
-step without changing the system). `wsl` is the only platform implemented today.
+`setup` needs only the server's **address**: it connects to the server and reads
+the public key the server presents (the server signs both its inbound sshd and
+its outbound host dials with the same keypair, so that key is exactly what the
+host must trust — and it's public, so there's no secret to copy). It then
+installs+configures sshd (key-only auth), authorizes that key, starts sshd, and
+inspects WSL networking:
+
+- mirrored mode → prints the ready-to-run `dmux connect <wsl-ip>:<port>`.
+- NAT'd (default WSL2) → the 172.x IP isn't LAN-reachable; it explains the two
+  fixes (mirrored mode, or an elevated netsh portproxy) and prints the connect
+  line against the Windows host's LAN IP.
+
+Flags: `--server <addr>` (server address; its key is fetched automatically),
+`--port N` (host sshd port), `--user U` (login user), `--portproxy` (attempt the
+elevated Windows portproxy step via a UAC prompt), `--dry-run` (print every step
+without changing the system), `--server-key <key|@path>` (offline fallback when
+the host can't reach the server). `wsl` is the only platform implemented today.
 
 ## TUI
 

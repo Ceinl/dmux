@@ -21,11 +21,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // runSetup dispatches `dmux setup <platform> [flags]`.
@@ -55,7 +59,8 @@ type setupOpts struct {
 
 func runSetupWSL(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("setup wsl", flag.ContinueOnError)
-	serverKey := fs.String("server-key", "", "server public key to authorize: a key string, or @path to a .pub file")
+	server := fs.String("server", "", "dmux server address (host[:port], default port 2222); its key is fetched automatically")
+	serverKey := fs.String("server-key", "", "offline fallback: server public key as a string or @path, if --server is unreachable")
 	port := fs.Int("port", 22, "sshd port to configure on this host")
 	loginUser := fs.String("user", defaultUser(), "remote login user the server will connect as")
 	dryRun := fs.Bool("dry-run", false, "print the steps without changing the system")
@@ -64,7 +69,7 @@ func runSetupWSL(_ context.Context, args []string) error {
 		return err
 	}
 
-	key, err := resolveServerKey(*serverKey)
+	key, err := obtainServerKey(*server, *serverKey)
 	if err != nil {
 		return err
 	}
@@ -110,14 +115,66 @@ func runSetupWSL(_ context.Context, args []string) error {
 	return stepNetworking(opts)
 }
 
+// obtainServerKey gets the authorized_keys line for the server. Preferred path:
+// connect to --server and read the host key it presents — the server signs both
+// its inbound sshd and its outbound dials with the same keypair, so that key IS
+// what this host must trust. No copying, no secret. --server-key is an offline
+// fallback for when the host can't reach the server.
+func obtainServerKey(server, serverKey string) (string, error) {
+	if server != "" {
+		addr := ensureServerPort(server)
+		key, err := fetchServerKey(addr)
+		if err != nil {
+			return "", fmt.Errorf("setup: fetch key from server %s: %w "+
+				"(is the server running? otherwise pass --server-key)", addr, err)
+		}
+		fmt.Printf("    fetched server key from %s\n", addr)
+		return key, nil
+	}
+	if serverKey != "" {
+		return resolveServerKey(serverKey)
+	}
+	return "", fmt.Errorf("setup: pass --server <addr> (recommended) or --server-key <key|@path>")
+}
+
+// fetchServerKey opens an SSH handshake to the server and captures the host key
+// it presents, without completing auth. This is the ssh-keyscan technique: the
+// host-key callback fires before authentication, so we grab the key and abort.
+func fetchServerKey(addr string) (string, error) {
+	var captured ssh.PublicKey
+	errCaptured := fmt.Errorf("key captured")
+	cfg := &ssh.ClientConfig{
+		User: "dmux",
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			captured = key
+			return errCaptured // stop the handshake; we have what we need
+		},
+		Timeout: 10 * time.Second,
+	}
+	if conn, err := ssh.Dial("tcp", addr, cfg); err == nil {
+		conn.Close()
+	}
+	if captured == nil {
+		return "", fmt.Errorf("server presented no host key")
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(captured))), nil
+}
+
+// ensureServerPort defaults the dmux server port (2222) when addr omits one.
+func ensureServerPort(addr string) string {
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		return addr
+	}
+	return addr + ":2222"
+}
+
 // resolveServerKey turns the --server-key value into a single authorized_keys
 // line. A leading @ means "read the file at this path"; otherwise the value is
 // the key text itself.
 func resolveServerKey(v string) (string, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return "", fmt.Errorf("setup: --server-key is required " +
-			"(the server's public key, e.g. @~/.config/dmux/dmux_host_key.pub)")
+		return "", fmt.Errorf("setup: --server-key is empty")
 	}
 	if strings.HasPrefix(v, "@") {
 		path := expandHome(strings.TrimPrefix(v, "@"))
@@ -171,7 +228,7 @@ func stepAuthorizeKey(o setupOpts) error {
 	authPath := filepath.Join(sshDir, "authorized_keys")
 
 	if o.dryRun {
-		fmt.Printf("    mkdir -p %s && append server key to %s\n", sshDir, authPath)
+		fmt.Printf("    mkdir -p %s && append to %s:\n      %s\n", sshDir, authPath, o.serverKey)
 		return nil
 	}
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {

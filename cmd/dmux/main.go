@@ -76,7 +76,7 @@ usage:
   dmux serve [--data-dir DIR] [--listen ADDR]
   dmux connect <host-addr> [--user USER] [--key KEYREF] [--data-dir DIR]
   dmux sethome <path> --host <host-id> [--depth N] [--data-dir DIR]
-  dmux setup wsl --server-key <key|@path> [--port N] [--user USER] [--portproxy] [--dry-run]
+  dmux setup wsl --server <addr> [--port N] [--user USER] [--portproxy] [--dry-run]
   ssh dmux@<server>        attach to the TUI
 
 run connect/sethome on the server box (v1: server-side admin).
@@ -165,31 +165,23 @@ func runServe(ctx context.Context, args []string) error {
 	for _, hint := range attachHints(cfg.ListenAddr) {
 		fmt.Fprintf(os.Stderr, "  attach: %s\n", hint)
 	}
+	fmt.Fprintf(os.Stderr, "  onboard a host: %s\n", setupHint(cfg.ListenAddr))
 	return srv.Run(ctx)
 }
 
-// attachHints turns the listen address into concrete `ssh dmux@…` commands an
-// interface can run. When the host part is a wildcard (":2222", "0.0.0.0:…",
-// "[::]:…"), it expands to the machine's reachable addresses.
-func attachHints(listenAddr string) []string {
+// reachableAddrs expands the listen address into the host strings clients can
+// actually reach, plus the port. A wildcard bind (":2222", "0.0.0.0:…", "[::]:…")
+// expands to localhost + this machine's non-loopback addresses; a concrete bind
+// is returned as-is. ok is false when listenAddr has no host:port form.
+func reachableAddrs(listenAddr string) (hosts []string, port string, ok bool) {
 	host, port, err := net.SplitHostPort(listenAddr)
 	if err != nil {
-		return []string{fmt.Sprintf("ssh dmux@<server> (listen %s)", listenAddr)}
+		return nil, "", false
 	}
-
-	cmd := func(h string) string {
-		if port == "22" {
-			return fmt.Sprintf("ssh dmux@%s", h)
-		}
-		return fmt.Sprintf("ssh dmux@%s -p %s", h, port)
-	}
-
 	if host != "" && host != "0.0.0.0" && host != "::" {
-		return []string{cmd(host)}
+		return []string{host}, port, true
 	}
-
-	// Wildcard bind: list loopback + non-loopback IPv4/IPv6 addresses.
-	hints := []string{cmd("localhost")}
+	hosts = []string{"localhost"}
 	if addrs, err := net.InterfaceAddrs(); err == nil {
 		for _, a := range addrs {
 			ipnet, ok := a.(*net.IPNet)
@@ -200,10 +192,49 @@ func attachHints(listenAddr string) []string {
 			if ipnet.IP.To4() == nil {
 				ip = "[" + ip + "]" // bracket IPv6 for ssh
 			}
-			hints = append(hints, cmd(ip))
+			hosts = append(hosts, ip)
+		}
+	}
+	return hosts, port, true
+}
+
+// attachHints turns the listen address into concrete `ssh dmux@…` commands an
+// interface can run.
+func attachHints(listenAddr string) []string {
+	hosts, port, ok := reachableAddrs(listenAddr)
+	if !ok {
+		return []string{fmt.Sprintf("ssh dmux@<server> (listen %s)", listenAddr)}
+	}
+	hints := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if port == "22" {
+			hints = append(hints, fmt.Sprintf("ssh dmux@%s", h))
+		} else {
+			hints = append(hints, fmt.Sprintf("ssh dmux@%s -p %s", h, port))
 		}
 	}
 	return hints
+}
+
+// setupHint returns the one-line `dmux setup` command to run on a host being
+// onboarded, pointed at this server. It uses the first reachable, non-loopback
+// address (a host can't reach the server over the server's own localhost).
+func setupHint(listenAddr string) string {
+	hosts, port, ok := reachableAddrs(listenAddr)
+	server := "<server-ip>"
+	if ok {
+		server = "localhost"
+		for _, h := range hosts {
+			if h != "localhost" && h != "127.0.0.1" && h != "[::1]" {
+				server = h
+				break
+			}
+		}
+		if port != "" && port != "2222" {
+			server += ":" + port
+		}
+	}
+	return fmt.Sprintf("go run github.com/Ceinl/dmux/cmd/dmux@latest setup wsl --server %s", server)
 }
 
 // runConnect implements `dmux connect <host-addr>`: verify SSH + key trust to a
