@@ -16,7 +16,9 @@ type entry struct {
 	action func()
 }
 
-// overlay is a full-screen modal list with a fuzzy-filter prompt (M6.6).
+// overlay is a full-screen modal list with a fuzzy-filter prompt (M6.6). When
+// onSubmit is set it acts as a single-line text input instead: the list is
+// hidden and Enter commits the typed query rather than selecting an entry.
 type overlay struct {
 	title    string
 	entries  []entry
@@ -24,6 +26,8 @@ type overlay struct {
 	query    string
 	sel      int // index into filtered
 	escState int // 0 none, 1 saw ESC, 2 saw ESC[
+
+	onSubmit func(string) // non-nil → text-input overlay (e.g. rename)
 }
 
 // openPicker builds the cross-device project picker (prefix+p) (M6.6).
@@ -70,6 +74,23 @@ func (u *connUI) openList() {
 	u.startOverlay(ov)
 }
 
+// openRename prompts for a new title for the current session (prefix+r).
+func (u *connUI) openRename() {
+	id := u.currentView()
+	if id == "" {
+		return
+	}
+	ov := &overlay{title: "Rename session — Enter to save, Esc to cancel"}
+	if s, ok := u.t.sessions.Get(id); ok {
+		ov.query = s.Title
+	}
+	ov.onSubmit = func(name string) {
+		_ = u.t.sessions.Rename(id, strings.TrimSpace(name))
+		u.signalRedraw()
+	}
+	u.startOverlay(ov)
+}
+
 func (u *connUI) startOverlay(ov *overlay) {
 	ov.refilter()
 	u.mu.Lock()
@@ -85,6 +106,13 @@ func (u *connUI) selectOverlay() {
 	ov := u.overlay
 	u.mu.Unlock()
 	if ov == nil {
+		return
+	}
+	// Text-input overlay (rename): commit the typed query.
+	if ov.onSubmit != nil {
+		submit, q := ov.onSubmit, ov.query
+		u.closeOverlay()
+		submit(q)
 		return
 	}
 	var act func()
@@ -167,6 +195,11 @@ func (u *connUI) renderOverlay() {
 	sb.WriteString("\r\n> ")
 	sb.WriteString(clip(ov.query, cols-2))
 	sb.WriteString("\r\n")
+
+	if ov.onSubmit != nil {
+		u.writeString(sb.String())
+		return // text-input overlay: prompt only, no list
+	}
 
 	maxRows := rows - 3
 	if maxRows < 1 {

@@ -69,6 +69,7 @@ func (f *fakeSessions) CloseHost(registry.HostID) []session.ID {
 	return f.closeHostIDs
 }
 func (f *fakeSessions) Write(session.ID, []byte) (int, error) { return 0, nil }
+func (f *fakeSessions) Rename(session.ID, string) error       { return nil }
 func (f *fakeSessions) Resize(id session.ID, sz remote.Size) error {
 	f.resizes[id] = sz
 	return nil

@@ -80,6 +80,9 @@ type Manager interface {
 	// CloseHost closes every session on a host that has gone down.
 	CloseHost(id registry.HostID) []ID
 
+	// Rename sets a user-chosen title for a session (shown in the sidebar).
+	Rename(id ID, title string) error
+
 	// Write delivers arbitrated keystrokes to the session's PTY.
 	Write(id ID, p []byte) (int, error)
 	// Resize sets the session's negotiated PTY size.

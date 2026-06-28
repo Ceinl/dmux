@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -76,6 +77,14 @@ func (m *manager) List() []Session {
 	for _, ls := range m.sessions {
 		out = append(out, ls.snapshotRec())
 	}
+	// Stable order: map iteration is randomized, so sort by creation time (then
+	// ID) to keep the sidebar list from shuffling between renders/clicks.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Created.Equal(out[j].Created) {
+			return out[i].Created.Before(out[j].Created)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
@@ -333,6 +342,20 @@ func (ls *liveSession) snapshotRec() Session {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	return ls.rec
+}
+
+// Rename sets a session's display title.
+func (m *manager) Rename(id ID, title string) error {
+	m.mu.RLock()
+	ls, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
+		return ErrNotFound
+	}
+	ls.mu.Lock()
+	ls.rec.Title = title
+	ls.mu.Unlock()
+	return nil
 }
 
 func newID() ID {

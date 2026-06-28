@@ -9,6 +9,16 @@ import (
 	"github.com/hinshun/vt10x"
 )
 
+// Default terminal colors for the main pane: for cells the host program leaves
+// at its default, emit the SGR "default background/foreground" sequences so the
+// terminal's own theme (and any transparency) shows through instead of a fixed
+// RGB. (Passing "" to screen.Set won't do — it substitutes the screen lib's own
+// hard-coded default, so we emit the reset sequences explicitly.)
+const (
+	neutralBG = "\x1b[49m"
+	neutralFG = "\x1b[39m"
+)
+
 // pane is the main region: a vt10x terminal emulator that ingests the active
 // session's raw PTY stream and renders its cell grid into the screen buffer.
 // Using an emulator (rather than forwarding bytes) is what lets a sidebar live
@@ -93,7 +103,15 @@ func (p *pane) Render(s *screen.Screen) {
 			if ch == 0 {
 				ch = ' '
 			}
-			s.Set(x0+x, y0+y, ch, vtColor(g.FG, true), vtColor(g.BG, false), "")
+			fg := vtColor(g.FG, true)
+			if fg == "" {
+				fg = neutralFG
+			}
+			bg := vtColor(g.BG, false)
+			if bg == "" {
+				bg = neutralBG
+			}
+			s.Set(x0+x, y0+y, ch, fg, bg, "")
 		}
 	}
 	cur := t.Cursor()

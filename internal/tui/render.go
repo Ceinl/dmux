@@ -69,10 +69,13 @@ func (u *connUI) prefixEvent(ev keyboard.Event) (quit bool) {
 		u.openPicker()
 	case 'l', 'L', 's', 'S':
 		u.openList()
+	case 'r', 'R':
+		u.openRename()
 	case 'c', 'C':
 		u.toggleSidebar()
 	case 'd', 'D':
-		_ = u.conn.Close()
+		// Detach: return true so Handle's defers send exitTerm (restoring the
+		// client's screen) before the connection is closed.
 		return true
 	}
 	return false

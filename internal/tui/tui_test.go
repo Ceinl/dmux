@@ -177,6 +177,18 @@ func (f *fakeSessions) Write(id session.ID, p []byte) (int, error) {
 	f.written[id] = append(f.written[id], p...)
 	return len(p), nil
 }
+
+func (f *fakeSessions) Rename(id session.ID, title string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.running {
+		if f.running[i].ID == id {
+			f.running[i].Title = title
+			return nil
+		}
+	}
+	return nil
+}
 func (f *fakeSessions) Resize(session.ID, remote.Size) error             { return nil }
 func (f *fakeSessions) Scrollback(session.ID) (session.Scrollback, bool) { return nil, false }
 func (f *fakeSessions) Subscribe(session.ID) (<-chan session.Event, func(), error) {
@@ -237,7 +249,7 @@ func TestStreamForwardsToSession(t *testing.T) {
 
 func TestPrefixLiteralAndDetach(t *testing.T) {
 	sess := newFakeSessions()
-	u, conn := newUI(t, sess)
+	u, _ := newUI(t, sess)
 	u.viewing = "s1"
 	ctrlD := keyboard.Event{Type: keyboard.KeyRune, Ch: 'D', Ctrl: true} // Ctrl-D = prefix
 
@@ -256,13 +268,12 @@ func TestPrefixLiteralAndDetach(t *testing.T) {
 		t.Errorf("literal prefix = %v, want [%d]", got, u.t.prefix)
 	}
 
-	// prefix + d → detach (quit + conn closed).
+	// prefix + d → detach: signals quit. The conn is closed by Handle's defer
+	// chain (after exitTerm is written), not by prefixEvent itself, so that the
+	// alt-screen-leave sequence reaches the client before the socket closes.
 	u.streamEvent(ctrlD)
 	if quit := u.prefixEvent(keyboard.Event{Type: keyboard.KeyRune, Ch: 'd'}); !quit {
 		t.Error("prefix+d should quit")
-	}
-	if !conn.isClosed() {
-		t.Error("prefix+d should close the conn")
 	}
 }
 

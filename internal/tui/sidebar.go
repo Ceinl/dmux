@@ -13,6 +13,7 @@ import (
 const (
 	sidebarWidth   = 26 // expanded
 	collapsedWidth = 1  // "1 pixel" sliver with an expand handle
+	rowHeight      = 1  // fixed height of the toggle and each session row
 )
 
 // sidebar is the right-hand panel: a collapse toggle at the top, then one
@@ -40,6 +41,7 @@ func newSidebar(onCollapse func(), onSelect func(session.ID)) *sidebar {
 	sb.div.SetStyle(panelStyle())
 
 	sb.collapse = components.NewButton(collapseLabel(false))
+	sb.collapse.SetStyles(headerStyle(), headerFocusStyle(), headerPressStyle())
 	sb.collapse.OnClick = onCollapse
 
 	sb.onSelect = onSelect
@@ -82,7 +84,7 @@ func (sb *sidebar) rebuild(sessions []session.Session, active session.ID) {
 	sb.div.SetDirection(layout.Column)
 	sb.div.SetStyle(panelStyle())
 	sb.applyWidth()
-	sb.div.AppendChild(sb.collapse)
+	sb.div.AppendChild(fixedRow(sb.collapse))
 	sb.rows = sb.rows[:0]
 
 	if sb.collapsed {
@@ -101,9 +103,21 @@ func (sb *sidebar) rebuild(sessions []session.Session, active session.ID) {
 		}
 		id := s.ID
 		b.OnClick = func() { sb.onSelect(id) }
-		sb.div.AppendChild(b)
+		sb.div.AppendChild(fixedRow(b))
 		sb.rows = append(sb.rows, &sessButton{btn: b, id: id})
 	}
+}
+
+// fixedRow wraps a component in a full-width, fixed-height container so it keeps
+// a static size in the sidebar's column instead of growing to fill free space.
+func fixedRow(child layout.Component) *components.Div {
+	row := components.NewDiv()
+	row.SetSize(
+		layout.Unit{Type: layout.UnitGrow},
+		layout.Unit{Type: layout.UnitPx, Value: float64(rowHeight)},
+	)
+	row.AppendChild(child)
+	return row
 }
 
 // routeMouse dispatches a mouse event to the collapse toggle and session
@@ -163,32 +177,53 @@ func listSignature(sessions []session.Session, active session.ID, collapsed bool
 
 func panelStyle() layout.Style {
 	var s layout.Style
-	s.SetBackground(30, 28, 36)
-	s.SetForeground(200, 200, 200)
+	s.SetBackground(24, 24, 24)
+	s.SetForeground(190, 190, 190)
 	return s
 }
 func itemStyle() layout.Style {
 	var s layout.Style
-	s.SetBackground(40, 37, 50)
-	s.SetForeground(210, 206, 220)
+	s.SetBackground(32, 32, 32)
+	s.SetForeground(205, 205, 205)
 	return s
 }
 func activeStyle() layout.Style {
 	var s layout.Style
-	s.SetBackground(96, 90, 128)
+	s.SetBackground(58, 58, 58)
 	s.SetForeground(255, 255, 255)
 	s.AddTextDecoration(layout.Bold)
 	return s
 }
 func focusStyle() layout.Style {
 	var s layout.Style
-	s.SetBackground(72, 68, 96)
-	s.SetForeground(238, 234, 248)
+	s.SetBackground(44, 44, 44)
+	s.SetForeground(235, 235, 235)
 	return s
 }
 func pressStyle() layout.Style {
 	var s layout.Style
-	s.SetBackground(120, 112, 160)
+	s.SetBackground(72, 72, 72)
+	s.SetForeground(255, 255, 255)
+	return s
+}
+
+// header styles drive the collapse toggle: it reads as part of the panel rather
+// than a raised button.
+func headerStyle() layout.Style {
+	var s layout.Style
+	s.SetBackground(24, 24, 24)
+	s.SetForeground(150, 150, 150)
+	return s
+}
+func headerFocusStyle() layout.Style {
+	var s layout.Style
+	s.SetBackground(38, 38, 38)
+	s.SetForeground(220, 220, 220)
+	return s
+}
+func headerPressStyle() layout.Style {
+	var s layout.Style
+	s.SetBackground(58, 58, 58)
 	s.SetForeground(255, 255, 255)
 	return s
 }

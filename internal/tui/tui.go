@@ -110,6 +110,10 @@ func (t *TUI) Handle(ctx context.Context, conn sshd.Conn) {
 	defer u.stopSub()
 
 	u.conn.Write([]byte(enterTerm))
+	// Defers run LIFO: write exitTerm (leave alt screen, restore cursor) while
+	// the conn is still open, then close it. Closing first would drop exitTerm
+	// and leave the client's terminal stuck in the alt buffer.
+	defer u.conn.Close()
 	defer u.conn.Write([]byte(exitTerm))
 
 	u.buildTree()
