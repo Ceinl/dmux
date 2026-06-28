@@ -10,8 +10,6 @@ require (
 require github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 
 require (
-	github.com/Ceinl/plumtree/tui-runtime v0.0.0
+	github.com/Ceinl/plumtree/tui-runtime v0.0.0-20260627190250-3541ea2fd2ca
 	golang.org/x/sys v0.46.0 // indirect
 )
-
-replace github.com/Ceinl/plumtree/tui-runtime v0.0.0 => /Users/c/code/plumtree/tui-runtime
