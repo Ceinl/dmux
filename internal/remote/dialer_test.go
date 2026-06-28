@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/registry"
 )
 
 // newSigner makes a throwaway ed25519 ssh.Signer.

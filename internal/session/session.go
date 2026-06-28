@@ -7,9 +7,9 @@ package session
 import (
 	"time"
 
-	"dmux/internal/project"
-	"dmux/internal/registry"
-	"dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/project"
+	"github.com/Ceinl/dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/remote"
 )
 
 // ID uniquely identifies a session within the server.

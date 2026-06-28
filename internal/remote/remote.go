@@ -7,7 +7,7 @@ import (
 	"context"
 	"io"
 
-	"dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/registry"
 )
 
 // Size is a PTY window size in character cells.

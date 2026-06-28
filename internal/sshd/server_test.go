@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/remote"
 )
 
 func newSigner(t *testing.T) ssh.Signer {

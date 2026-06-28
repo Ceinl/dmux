@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"dmux/internal/config"
-	"dmux/internal/remote"
-	"dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/config"
+	"github.com/Ceinl/dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/session"
 )
 
 // ErrNotFound is returned for unknown client IDs.

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"dmux/internal/config"
-	"dmux/internal/remote"
-	"dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/config"
+	"github.com/Ceinl/dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/session"
 )
 
 func sz(r, c uint16) remote.Size { return remote.Size{Rows: r, Cols: c} }

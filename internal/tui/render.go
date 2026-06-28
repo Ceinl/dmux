@@ -5,7 +5,7 @@ import (
 	"github.com/Ceinl/plumtree/tui-runtime/keyboard"
 	"github.com/Ceinl/plumtree/tui-runtime/layout"
 
-	"dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/remote"
 )
 
 // handleEvent routes one input event. Returns true to quit (detach).

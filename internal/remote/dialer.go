@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/registry"
 )
 
 // keepaliveInterval bounds how long a half-dead host stays undetected (M3.7).

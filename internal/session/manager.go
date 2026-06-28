@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"dmux/internal/config"
-	"dmux/internal/project"
-	"dmux/internal/registry"
-	"dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/config"
+	"github.com/Ceinl/dmux/internal/project"
+	"github.com/Ceinl/dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/remote"
 )
 
 // ErrNotFound is returned for unknown session IDs.

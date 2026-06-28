@@ -5,9 +5,9 @@
 package attach
 
 import (
-	"dmux/internal/config"
-	"dmux/internal/remote"
-	"dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/config"
+	"github.com/Ceinl/dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/session"
 )
 
 // ClientID uniquely identifies an attached interface.

@@ -7,7 +7,7 @@ import (
 	"github.com/Ceinl/plumtree/tui-runtime/keyboard"
 	"github.com/Ceinl/plumtree/tui-runtime/layout"
 
-	"dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/session"
 )
 
 const (

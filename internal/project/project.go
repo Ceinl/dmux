@@ -7,7 +7,7 @@ package project
 import (
 	"context"
 
-	"dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/registry"
 )
 
 // Project is one entry in the cross-host picker.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/registry"
 )
 
 // fakeRunner returns canned output per command substring.

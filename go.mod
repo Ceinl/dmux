@@ -1,4 +1,4 @@
-module dmux
+module github.com/Ceinl/dmux
 
 go 1.26.2
 

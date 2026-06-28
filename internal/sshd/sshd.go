@@ -7,8 +7,8 @@ package sshd
 import (
 	"context"
 
-	"dmux/internal/attach"
-	"dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/attach"
+	"github.com/Ceinl/dmux/internal/remote"
 )
 
 // Conn is one accepted inbound interface connection: its terminal I/O, resize

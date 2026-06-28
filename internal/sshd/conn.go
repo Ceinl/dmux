@@ -5,8 +5,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"dmux/internal/attach"
-	"dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/attach"
+	"github.com/Ceinl/dmux/internal/remote"
 )
 
 // ptyReqPayload is the RFC 4254 "pty-req" body.

@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"dmux/internal/attach"
+	"github.com/Ceinl/dmux/internal/attach"
 )
 
 // AuthFunc decides whether an interface's public key may attach. SSH keys only;

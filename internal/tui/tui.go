@@ -19,13 +19,13 @@ import (
 	"github.com/Ceinl/plumtree/tui-runtime/layout"
 	"github.com/Ceinl/plumtree/tui-runtime/screen"
 
-	"dmux/internal/attach"
-	"dmux/internal/config"
-	"dmux/internal/project"
-	"dmux/internal/registry"
-	"dmux/internal/remote"
-	"dmux/internal/session"
-	"dmux/internal/sshd"
+	"github.com/Ceinl/dmux/internal/attach"
+	"github.com/Ceinl/dmux/internal/config"
+	"github.com/Ceinl/dmux/internal/project"
+	"github.com/Ceinl/dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/sshd"
 )
 
 // Controller is the narrow slice of the server the TUI invokes. Declaring it

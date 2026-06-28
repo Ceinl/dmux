@@ -25,15 +25,15 @@ import (
 	"strings"
 	"syscall"
 
-	"dmux/internal/attach"
-	"dmux/internal/config"
-	"dmux/internal/project"
-	"dmux/internal/registry"
-	"dmux/internal/remote"
-	"dmux/internal/server"
-	"dmux/internal/session"
-	"dmux/internal/sshd"
-	"dmux/internal/tui"
+	"github.com/Ceinl/dmux/internal/attach"
+	"github.com/Ceinl/dmux/internal/config"
+	"github.com/Ceinl/dmux/internal/project"
+	"github.com/Ceinl/dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/remote"
+	"github.com/Ceinl/dmux/internal/server"
+	"github.com/Ceinl/dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/sshd"
+	"github.com/Ceinl/dmux/internal/tui"
 )
 
 func main() {
@@ -53,6 +53,8 @@ func main() {
 		err = runConnect(ctx, os.Args[2:])
 	case "sethome":
 		err = runSetHome(ctx, os.Args[2:])
+	case "setup":
+		err = runSetup(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -74,9 +76,11 @@ usage:
   dmux serve [--data-dir DIR] [--listen ADDR]
   dmux connect <host-addr> [--user USER] [--key KEYREF] [--data-dir DIR]
   dmux sethome <path> --host <host-id> [--depth N] [--data-dir DIR]
+  dmux setup wsl --server-key <key|@path> [--port N] [--user USER] [--portproxy] [--dry-run]
   ssh dmux@<server>        attach to the TUI
 
 run connect/sethome on the server box (v1: server-side admin).
+run setup on the host being onboarded — it prints the connect line for the server.
 `)
 }
 

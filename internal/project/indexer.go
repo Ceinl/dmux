@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/registry"
 )
 
 // Runner runs a single command on a host over SSH and returns its stdout. The

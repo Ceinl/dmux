@@ -6,8 +6,8 @@ import (
 
 	"github.com/sahilm/fuzzy"
 
-	"dmux/internal/registry"
-	"dmux/internal/session"
+	"github.com/Ceinl/dmux/internal/registry"
+	"github.com/Ceinl/dmux/internal/session"
 )
 
 // entry is one selectable row in an overlay.
