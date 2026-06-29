@@ -199,8 +199,15 @@ func (s *Server) Jump(c attach.ClientID, target session.ID) error {
 	if sess.State != session.StateRunning {
 		return fmt.Errorf("server: jump to non-running session %s", target)
 	}
+	var previous session.ID
+	if cl, ok := s.clients.Get(c); ok {
+		previous = cl.Viewing
+	}
 	if err := s.clients.SetViewing(c, target); err != nil {
 		return err
+	}
+	if previous != "" && previous != target {
+		s.renegotiate(previous)
 	}
 	s.renegotiate(target)
 	return nil

@@ -400,6 +400,9 @@ Implements `sshd.Handler`. Drives rendering + input for each attached interface.
 > and surfaces navigation as **full-screen overlays** on the prefix key:
 >   - `prefix p` → cross-device project picker (fuzzy via sahilm/fuzzy)  ✔ M6.6
 >   - `prefix l`/`s` → running-session list → jump  ✔ (covers M6.2 navigation)
+>   - `prefix r` → rename the current session
+>   - `prefix k` → pick a device → manage it: color (persisted; "Auto" clears),
+>     rename (display name; empty clears), or set project-finder home dir
 >   - `prefix d` → detach; `prefix prefix` → send a literal prefix byte to the host
 > Down hosts greyed in a side panel (M6.2) is therefore deferred with the split.
 > **Import cycle (M6.0):** TUI declares its own `Controller` interface (Jump/

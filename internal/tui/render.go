@@ -72,7 +72,7 @@ func (u *connUI) prefixEvent(ev keyboard.Event) (quit bool) {
 	case 'r', 'R':
 		u.openRename()
 	case 'k', 'K':
-		u.openColorDevices()
+		u.openDevices()
 	case 'c', 'C':
 		u.toggleSidebar()
 	case 'd', 'D':
@@ -122,11 +122,13 @@ func (u *connUI) overlayEvent(ev keyboard.Event) {
 }
 
 // render lays out and paints the component tree, then places the host cursor.
-// It is a no-op while an overlay owns the screen (the overlay draws raw).
+// While an overlay owns the screen it delegates to renderOverlay, which paints
+// its own component tree onto the same screen.
 func (u *connUI) render() {
 	u.mu.Lock()
 	if u.mode == modeOverlay {
 		u.mu.Unlock()
+		u.renderOverlay() // overlays paint via the same component path
 		return
 	}
 	view := u.viewing
@@ -163,7 +165,6 @@ func (u *connUI) handleResize(sz remote.Size) {
 	u.mu.Lock()
 	u.size = sz
 	u.mu.Unlock()
-	_ = u.t.clients.SetSize(u.id, sz)
 	u.scr.Resize(int(sz.Cols), int(sz.Rows))
 }
 
@@ -173,16 +174,6 @@ func (u *connUI) forceFullRepaint() {
 	u.scr.Resize(u.scr.Width(), u.scr.Height())
 	u.signalRedraw()
 }
-
-// writeConn writes raw bytes to the interface (used by overlays). It goes
-// through the frame buffer and flushes immediately so the bytes appear at once
-// rather than as a flurry of tiny SSH packets.
-func (u *connUI) writeConn(b []byte) {
-	_, _ = u.out.Write(b)
-	_ = u.out.Flush()
-}
-func (u *connUI) writeString(s string) { u.writeConn([]byte(s)) }
-func (u *connUI) clear()                { u.writeString("\x1b[2J\x1b[H") }
 
 // encode turns a decoded keyboard event back into the bytes to send to the
 // remote shell (the parser does not retain the raw bytes).

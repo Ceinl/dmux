@@ -147,6 +147,20 @@ func (r *fileRegistry) Remove(id HostID) error {
 	return r.saveLocked()
 }
 
+// SetName sets a host's display name without touching other fields. An empty
+// name clears the override so the id is shown again.
+func (r *fileRegistry) SetName(id HostID, name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.hosts[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	h.Name = name
+	r.hosts[id] = h
+	return r.saveLocked()
+}
+
 // SetHome updates a host's project-indexing config without touching reachability
 // fields (M2.7).
 func (r *fileRegistry) SetHome(id HostID, cfg HomeConfig) error {

@@ -25,6 +25,10 @@ type Host struct {
 	Addr string // host:port the server dials
 	User string // remote login user
 
+	// Name is an optional user-chosen display name for this device, shown in the
+	// sidebar and pickers instead of the raw host id. Empty falls back to the id.
+	Name string
+
 	// KeyRef names the private key (in DataDir) the server presents to this
 	// host. Trust is established at registration, ssh-copy-id style.
 	KeyRef string
@@ -67,6 +71,8 @@ type Registry interface {
 	// Remove deletes a host from the registry.
 	Remove(id HostID) error
 
+	// SetName sets a host's display name; "" clears it and restores the id.
+	SetName(id HostID, name string) error
 	// SetHome updates a host's project-indexing config (`dmux sethome`).
 	SetHome(id HostID, cfg HomeConfig) error
 	// SetColor sets a host's sidebar color ("#rrggbb"); "" clears the override

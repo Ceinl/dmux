@@ -105,7 +105,7 @@ func (t *TUI) Handle(ctx context.Context, conn sshd.Conn) {
 		u.size = sz
 	}
 
-	if err := t.clients.Attach(attach.Client{ID: u.id, Interface: conn.Interface(), Size: u.size}); err != nil {
+	if err := t.clients.Attach(attach.Client{ID: u.id, Interface: conn.Interface(), Size: paneSizeForWindow(u.size, sidebarWidth)}); err != nil {
 		return
 	}
 	defer t.clients.Detach(u.id)
@@ -151,22 +151,25 @@ func (u *connUI) buildTree() {
 	// repaint latency-bound. Buffer a whole frame and flush it in one write.
 	u.out = bufio.NewWriterSize(u.conn, 64*1024)
 	u.scr = screen.NewScreenWithOutput(int(u.size.Cols), int(u.size.Rows), u.out)
-	u.pane = newPane(func(cols, rows int) {
-		// Resize the remote PTY to match the main pane.
-		if v := u.currentView(); v != "" {
-			_ = u.t.sessions.Resize(v, remote.Size{Rows: uint16(rows), Cols: uint16(cols)})
-		}
-	})
+	u.pane = newPane(func(cols, rows int) { u.onPaneResize(cols, rows) })
 	u.sidebar = newSidebar(
 		func() { u.toggleSidebar() },
 		func(id session.ID) { u.selectSession(id) },
 		func(hostID string) (uint8, uint8, uint8) { return u.t.deviceColor(registry.HostID(hostID)) },
+		func(hostID string) string { return u.t.deviceName(registry.HostID(hostID)) },
 	)
 
 	u.root = components.NewDiv()
 	u.root.SetDirection(layout.Row)
 	u.root.AppendChild(u.pane) // non-Div → grows to fill remaining width
 	u.root.AppendChild(u.sidebar.div)
+
+	// Seed the pane dimensions before autoAttach/OpenProject runs. The first
+	// real render will lay out the same size again, but initial session creation
+	// and switchView need the effective pane size, not the full SSH window.
+	if sz := u.expectedPaneSize(); sz.Rows > 0 && sz.Cols > 0 {
+		u.pane.Layout(0, 0, int(sz.Cols), int(sz.Rows))
+	}
 }
 
 // signalRedraw asks the main loop to repaint (coalesced, non-blocking).
@@ -206,13 +209,64 @@ func (u *connUI) switchView(id session.ID) {
 	u.cancelSub = cancel
 	u.mode = modeStream
 	u.mu.Unlock()
+	u.setClientViewing(id)
 
 	u.pane.reset()
+	// The session may have been created before the first layout pass. Push this
+	// client's current pane size into the shared-size negotiation explicitly so
+	// full-screen apps (tmux, vim) draw at the width the UI can render.
+	if w, h := u.pane.size(); w > 0 && h > 0 {
+		u.onPaneResize(w, h)
+	}
 	if sb, ok := u.t.sessions.Scrollback(id); ok {
 		u.pane.feed(sb.Snapshot())
 	}
 	go u.streamPump(events)
 	u.signalRedraw()
+}
+
+func (u *connUI) setClientViewing(id session.ID) {
+	var old session.ID
+	if c, ok := u.t.clients.Get(u.id); ok {
+		old = c.Viewing
+	}
+	_ = u.t.clients.SetViewing(u.id, id)
+	if old != "" && old != id {
+		u.resizeSessionToNegotiated(old)
+	}
+}
+
+func (u *connUI) onPaneResize(cols, rows int) {
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	sz := remote.Size{Rows: uint16(rows), Cols: uint16(cols)}
+	_ = u.t.clients.SetSize(u.id, sz)
+	if v := u.currentView(); v != "" {
+		u.resizeSessionToNegotiated(v)
+	}
+}
+
+func (u *connUI) resizeSessionToNegotiated(id session.ID) {
+	if sz, ok := u.t.clients.NegotiatedSize(id, u.t.cfg.ResizePolicy); ok {
+		_ = u.t.sessions.Resize(id, sz)
+	}
+}
+
+func (u *connUI) expectedPaneSize() remote.Size {
+	sidebarCols := sidebarWidth
+	if u.sidebar != nil {
+		sidebarCols = u.sidebar.width()
+	}
+	return paneSizeForWindow(u.size, sidebarCols)
+}
+
+func paneSizeForWindow(sz remote.Size, sidebarCols int) remote.Size {
+	cols := int(sz.Cols) - sidebarCols
+	if cols < 1 {
+		cols = 1
+	}
+	return remote.Size{Rows: sz.Rows, Cols: uint16(cols)}
 }
 
 // streamPump feeds session output into the emulator and triggers repaints.
@@ -303,6 +357,15 @@ func (t *TUI) deviceColor(id registry.HostID) (r, g, b uint8) {
 		}
 	}
 	return autoHostColor(string(id))
+}
+
+// deviceName resolves a device's display label: the user-chosen Name if set,
+// otherwise a short form of the host id.
+func (t *TUI) deviceName(id registry.HostID) string {
+	if h, ok := t.hosts.Get(id); ok && h.Name != "" {
+		return h.Name
+	}
+	return short(id)
 }
 
 // firstSize drains an initial size from the conn's resize channel if present.

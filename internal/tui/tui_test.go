@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Ceinl/plumtree/tui-runtime/keyboard"
+	"github.com/Ceinl/plumtree/tui-runtime/layout"
 	"github.com/Ceinl/plumtree/tui-runtime/screen"
 
 	"github.com/Ceinl/dmux/internal/attach"
@@ -66,10 +69,70 @@ func TestOverlayRefilterAndMove(t *testing.T) {
 	}
 }
 
+// snapshotRows flattens a screen snapshot into one string per row so tests can
+// assert on rendered text regardless of styling.
+func snapshotRows(snap [][]screen.Cell) []string {
+	rows := make([]string, len(snap))
+	for y, line := range snap {
+		var b strings.Builder
+		for _, c := range line {
+			if c.Ch == 0 {
+				b.WriteByte(' ')
+				continue
+			}
+			b.WriteRune(c.Ch)
+		}
+		rows[y] = b.String()
+	}
+	return rows
+}
+
+func snapshotContains(rows []string, want string) bool {
+	for _, r := range rows {
+		if strings.Contains(r, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRenderOverlayTwoPane checks the project picker paints, via the component
+// tree, a list on the left and the highlighted entry's info card on the right.
+func TestRenderOverlayTwoPane(t *testing.T) {
+	u := &connUI{}
+	u.out = bufio.NewWriter(new(bytes.Buffer))
+	u.scr = screen.NewScreenWithOutput(70, 12, new(bytes.Buffer))
+
+	ov := &overlay{
+		title:   "Projects",
+		entries: []entry{{label: "dmux"}, {label: "rele"}},
+		preview: func(i int) layout.Component {
+			return textRow("Path /Users/c/code", ovValueStyle())
+		},
+	}
+	ov.refilter()
+	ov.sel = 1
+	u.overlay = ov
+	u.mode = modeOverlay
+
+	u.renderOverlay()
+	rows := snapshotRows(u.scr.Snapshot())
+
+	if !snapshotContains(rows, "Projects") {
+		t.Error("title not rendered")
+	}
+	if !snapshotContains(rows, "dmux") || !snapshotContains(rows, "rele") {
+		t.Error("project list not rendered")
+	}
+	if !snapshotContains(rows, "Path /Users/c/code") {
+		t.Error("preview card not rendered in right pane")
+	}
+}
+
 // --- sidebar ----------------------------------------------------------------
 
 func TestSidebarToggleWidth(t *testing.T) {
-	sb := newSidebar(func() {}, func(session.ID) {}, autoHostColor)
+	sb := newSidebar(func() {}, func(session.ID) {}, autoHostColor, nil)
 	if sb.width() != sidebarWidth {
 		t.Errorf("expanded width = %d, want %d", sb.width(), sidebarWidth)
 	}
@@ -88,7 +151,7 @@ func TestSidebarToggleWidth(t *testing.T) {
 
 func TestSidebarRebuildClickSelects(t *testing.T) {
 	var selected session.ID
-	sb := newSidebar(func() {}, func(id session.ID) { selected = id }, autoHostColor)
+	sb := newSidebar(func() {}, func(id session.ID) { selected = id }, autoHostColor, nil)
 	sb.rebuild([]session.Session{
 		{ID: "s1", HostID: "hA", State: session.StateRunning, Title: "app"},
 		{ID: "s2", HostID: "hB", State: session.StateRunning, Title: "web"},
@@ -129,7 +192,7 @@ type fakeConn struct {
 	resize chan remote.Size
 }
 
-func newFakeConn() *fakeConn { return &fakeConn{resize: make(chan remote.Size, 8)} }
+func newFakeConn() *fakeConn                    { return &fakeConn{resize: make(chan remote.Size, 8)} }
 func (c *fakeConn) ClientID() attach.ClientID   { return "client-1" }
 func (c *fakeConn) Interface() string           { return "test" }
 func (c *fakeConn) Read(p []byte) (int, error)  { return 0, errClosed }
@@ -150,9 +213,10 @@ func (e errStr) Error() string { return string(e) }
 const errClosed = errStr("closed")
 
 type fakeSessions struct {
-	mu      sync.Mutex
-	written map[session.ID][]byte
-	running []session.Session
+	mu        sync.Mutex
+	written   map[session.ID][]byte
+	running   []session.Session
+	resizedTo map[session.ID]remote.Size
 }
 
 func newFakeSessions() *fakeSessions {
@@ -189,7 +253,15 @@ func (f *fakeSessions) Rename(id session.ID, title string) error {
 	}
 	return nil
 }
-func (f *fakeSessions) Resize(session.ID, remote.Size) error             { return nil }
+func (f *fakeSessions) Resize(id session.ID, sz remote.Size) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resizedTo == nil {
+		f.resizedTo = map[session.ID]remote.Size{}
+	}
+	f.resizedTo[id] = sz
+	return nil
+}
 func (f *fakeSessions) Scrollback(session.ID) (session.Scrollback, bool) { return nil, false }
 func (f *fakeSessions) Subscribe(session.ID) (<-chan session.Event, func(), error) {
 	return make(chan session.Event), func() {}, nil
@@ -223,7 +295,7 @@ func newUI(t *testing.T, sess *fakeSessions) (*connUI, *fakeConn) {
 		t: tui, ctx: context.Background(), conn: conn, id: conn.ClientID(),
 		size: remote.Size{Rows: 24, Cols: 80}, redraw: make(chan struct{}, 1),
 	}
-	u.sidebar = newSidebar(func() {}, func(session.ID) {}, autoHostColor)
+	u.sidebar = newSidebar(func() {}, func(session.ID) {}, autoHostColor, nil)
 	_ = clients.Attach(attach.Client{ID: u.id, Size: u.size})
 	return u, conn
 }

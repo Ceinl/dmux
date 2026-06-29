@@ -66,13 +66,21 @@ func (p *pane) reset() {
 	p.term = vt10x.New(vt10x.WithSize(p.w, p.h))
 }
 
+// size reports the pane's current cell dimensions, so a freshly-attached session
+// can have its remote PTY resized to match what the pane actually renders.
+func (p *pane) size() (w, h int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.w, p.h
+}
+
 // --- layout.Component ---
 
-func (p *pane) GetStyle() layout.Style          { return p.style }
-func (p *pane) IsDirty() bool                   { return true } // emulator content changes freely
-func (p *pane) MakeDirty()                      {}
-func (p *pane) ClearDirty()                     {}
-func (p *pane) SetParent(layout.Component)      {}
+func (p *pane) GetStyle() layout.Style     { return p.style }
+func (p *pane) IsDirty() bool              { return true } // emulator content changes freely
+func (p *pane) MakeDirty()                 {}
+func (p *pane) ClearDirty()                {}
+func (p *pane) SetParent(layout.Component) {}
 
 func (p *pane) Layout(x, y, w, h int) {
 	p.mu.Lock()

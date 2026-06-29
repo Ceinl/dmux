@@ -30,6 +30,8 @@ type sidebar struct {
 	onSelect  func(session.ID)
 	// colorOf resolves a device's sidebar color (user override or auto-derived).
 	colorOf func(hostID string) (r, g, b uint8)
+	// nameOf resolves a device's display name (user override or short id).
+	nameOf func(hostID string) string
 }
 
 // sessButton pairs a clickable button with the session it selects.
@@ -38,8 +40,8 @@ type sessButton struct {
 	id  session.ID
 }
 
-func newSidebar(onCollapse func(), onSelect func(session.ID), colorOf func(string) (uint8, uint8, uint8)) *sidebar {
-	sb := &sidebar{div: components.NewDiv(), colorOf: colorOf}
+func newSidebar(onCollapse func(), onSelect func(session.ID), colorOf func(string) (uint8, uint8, uint8), nameOf func(string) string) *sidebar {
+	sb := &sidebar{div: components.NewDiv(), colorOf: colorOf, nameOf: nameOf}
 	sb.div.SetDirection(layout.Column)
 	sb.div.SetSize(layout.Unit{Type: layout.UnitPx, Value: sidebarWidth}, layout.Unit{Type: layout.UnitGrow})
 	sb.div.SetStyle(panelStyle())
@@ -77,7 +79,7 @@ func (sb *sidebar) applyWidth() {
 // rebuild reconstructs the button list from sessions when the set changes.
 // active is the currently-viewed session (highlighted).
 func (sb *sidebar) rebuild(sessions []session.Session, active session.ID) {
-	sig := listSignature(sessions, active, sb.collapsed)
+	sig := sb.listSignature(sessions, active, sb.collapsed)
 	if sig == sb.sig {
 		return
 	}
@@ -97,7 +99,7 @@ func (sb *sidebar) rebuild(sessions []session.Session, active session.ID) {
 
 	for _, s := range sessions {
 		s := s
-		label := fmt.Sprintf(" %s", sessionItemLabel(s))
+		label := fmt.Sprintf(" %s", sb.sessionItemLabel(s))
 		b := components.NewButton(label)
 		r, g, bl := sb.colorOf(string(s.HostID))
 		if s.ID == active {
@@ -162,22 +164,34 @@ func collapseLabel(collapsed bool) string {
 	return "< sessions"
 }
 
-func sessionItemLabel(s session.Session) string {
+func (sb *sidebar) sessionItemLabel(s session.Session) string {
 	name := s.Title
 	if name == "" {
 		name = string(s.ID)
 	}
-	host := string(s.HostID)
-	if len(host) > 8 {
-		host = host[:8]
-	}
+	host := sb.deviceLabel(string(s.HostID))
 	return fmt.Sprintf("%s · %s", host, name)
 }
 
-func listSignature(sessions []session.Session, active session.ID, collapsed bool) string {
+// deviceLabel resolves a host id to its display name (user-chosen or short id),
+// truncated to keep the sidebar row tidy.
+func (sb *sidebar) deviceLabel(hostID string) string {
+	host := hostID
+	if sb.nameOf != nil {
+		host = sb.nameOf(hostID)
+	}
+	if len(host) > 8 {
+		host = host[:8]
+	}
+	return host
+}
+
+// listSignature folds the resolved device label into the signature so a device
+// rename (which leaves session ids/titles untouched) still forces a rebuild.
+func (sb *sidebar) listSignature(sessions []session.Session, active session.ID, collapsed bool) string {
 	s := fmt.Sprintf("c=%v|a=%s|", collapsed, active)
 	for _, x := range sessions {
-		s += string(x.ID) + ":" + x.Title + ";"
+		s += string(x.ID) + ":" + x.Title + ":" + sb.deviceLabel(string(x.HostID)) + ";"
 	}
 	return s
 }
@@ -190,6 +204,7 @@ func panelStyle() layout.Style {
 	s.SetForeground(190, 190, 190)
 	return s
 }
+
 // itemStyle is a resting session row, tinted with its device's color so each
 // device reads as a distinct hue in the list.
 func itemStyle(r, g, b uint8) layout.Style {
@@ -261,6 +276,7 @@ func hexColor(r, g, b uint8) string {
 func brighten(c uint8) uint8 {
 	return c + (255-c)/2
 }
+
 // focusStyle is a hovered (non-active) row: lighter background, brightened
 // device tint so the hover still reads as that device.
 func focusStyle(r, g, b uint8) layout.Style {

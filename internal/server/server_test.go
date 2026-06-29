@@ -197,6 +197,26 @@ func TestJumpValidates(t *testing.T) {
 	}
 }
 
+func TestJumpRenegotiatesPreviousSession(t *testing.T) {
+	srv, sessions, _, _, _ := newServer(t)
+	clients := attach.NewAttachments()
+	srv.clients = clients
+	sessions.states["old"] = session.StateRunning
+	sessions.states["live"] = session.StateRunning
+	_ = clients.Attach(attach.Client{ID: "c1", Viewing: "old", Size: remote.Size{Rows: 24, Cols: 80}})
+	_ = clients.Attach(attach.Client{ID: "c2", Viewing: "old", Size: remote.Size{Rows: 30, Cols: 100}})
+
+	if err := srv.Jump("c1", "live"); err != nil {
+		t.Fatalf("Jump live: %v", err)
+	}
+	if sessions.resizes["old"] != (remote.Size{Rows: 30, Cols: 100}) {
+		t.Errorf("old session resized to %v, want remaining viewer size 30x100", sessions.resizes["old"])
+	}
+	if sessions.resizes["live"] != (remote.Size{Rows: 24, Cols: 80}) {
+		t.Errorf("live session resized to %v, want c1 size 24x80", sessions.resizes["live"])
+	}
+}
+
 func TestProjectsSkipsDownAndDedupes(t *testing.T) {
 	srv, _, reg, idx, _ := newServer(t)
 	_ = reg.Add(registry.Host{ID: "up1", Addr: "a:22", User: "u", Status: registry.StatusUp})
