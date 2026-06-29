@@ -11,6 +11,7 @@
 package tui
 
 import (
+	"bufio"
 	"context"
 	"sync"
 
@@ -76,6 +77,7 @@ type connUI struct {
 	id   attach.ClientID
 
 	scr     *screen.Screen
+	out     *bufio.Writer // buffers a whole frame into one write to the SSH channel
 	root    *components.Div
 	pane    *pane
 	sidebar *sidebar
@@ -144,7 +146,11 @@ func (t *TUI) Handle(ctx context.Context, conn sshd.Conn) {
 
 // buildTree assembles the component tree: [ pane(grow) | sidebar(px) ].
 func (u *connUI) buildTree() {
-	u.scr = screen.NewScreenWithOutput(int(u.size.Cols), int(u.size.Rows), u.conn)
+	// The runtime's Screen.Flush writes a frame as many small Fprint calls. Sent
+	// straight to the SSH channel each becomes its own packet, which makes every
+	// repaint latency-bound. Buffer a whole frame and flush it in one write.
+	u.out = bufio.NewWriterSize(u.conn, 64*1024)
+	u.scr = screen.NewScreenWithOutput(int(u.size.Cols), int(u.size.Rows), u.out)
 	u.pane = newPane(func(cols, rows int) {
 		// Resize the remote PTY to match the main pane.
 		if v := u.currentView(); v != "" {
@@ -154,6 +160,7 @@ func (u *connUI) buildTree() {
 	u.sidebar = newSidebar(
 		func() { u.toggleSidebar() },
 		func(id session.ID) { u.selectSession(id) },
+		func(hostID string) (uint8, uint8, uint8) { return u.t.deviceColor(registry.HostID(hostID)) },
 	)
 
 	u.root = components.NewDiv()
@@ -285,6 +292,17 @@ func (t *TUI) firstUpHost() (registry.Host, bool) {
 		}
 	}
 	return registry.Host{}, false
+}
+
+// deviceColor resolves a device's sidebar color: the host's user-chosen override
+// if it parses, otherwise the auto-derived palette color.
+func (t *TUI) deviceColor(id registry.HostID) (r, g, b uint8) {
+	if h, ok := t.hosts.Get(id); ok {
+		if r, g, b, ok := parseHexColor(h.Color); ok {
+			return r, g, b
+		}
+	}
+	return autoHostColor(string(id))
 }
 
 // firstSize drains an initial size from the conn's resize channel if present.

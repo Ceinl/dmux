@@ -33,6 +33,11 @@ type Host struct {
 	// rather than duplicated.
 	HomeConfig
 
+	// Color is an optional user-chosen sidebar color for this device, stored as
+	// a "#rrggbb" hex string. Empty means the TUI derives a color automatically
+	// from the host ID.
+	Color string
+
 	Status   Status
 	LastSeen time.Time
 }
@@ -64,6 +69,9 @@ type Registry interface {
 
 	// SetHome updates a host's project-indexing config (`dmux sethome`).
 	SetHome(id HostID, cfg HomeConfig) error
+	// SetColor sets a host's sidebar color ("#rrggbb"); "" clears the override
+	// and restores the auto-derived color.
+	SetColor(id HostID, color string) error
 	// SetStatus updates reachability without touching other fields.
 	SetStatus(id HostID, s Status) error
 }

@@ -69,7 +69,7 @@ func TestOverlayRefilterAndMove(t *testing.T) {
 // --- sidebar ----------------------------------------------------------------
 
 func TestSidebarToggleWidth(t *testing.T) {
-	sb := newSidebar(func() {}, func(session.ID) {})
+	sb := newSidebar(func() {}, func(session.ID) {}, autoHostColor)
 	if sb.width() != sidebarWidth {
 		t.Errorf("expanded width = %d, want %d", sb.width(), sidebarWidth)
 	}
@@ -88,7 +88,7 @@ func TestSidebarToggleWidth(t *testing.T) {
 
 func TestSidebarRebuildClickSelects(t *testing.T) {
 	var selected session.ID
-	sb := newSidebar(func() {}, func(id session.ID) { selected = id })
+	sb := newSidebar(func() {}, func(id session.ID) { selected = id }, autoHostColor)
 	sb.rebuild([]session.Session{
 		{ID: "s1", HostID: "hA", State: session.StateRunning, Title: "app"},
 		{ID: "s2", HostID: "hB", State: session.StateRunning, Title: "web"},
@@ -223,7 +223,7 @@ func newUI(t *testing.T, sess *fakeSessions) (*connUI, *fakeConn) {
 		t: tui, ctx: context.Background(), conn: conn, id: conn.ClientID(),
 		size: remote.Size{Rows: 24, Cols: 80}, redraw: make(chan struct{}, 1),
 	}
-	u.sidebar = newSidebar(func() {}, func(session.ID) {})
+	u.sidebar = newSidebar(func() {}, func(session.ID) {}, autoHostColor)
 	_ = clients.Attach(attach.Client{ID: u.id, Size: u.size})
 	return u, conn
 }

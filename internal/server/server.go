@@ -17,6 +17,8 @@ package server
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/Ceinl/dmux/internal/attach"
 	"github.com/Ceinl/dmux/internal/config"
@@ -212,19 +214,40 @@ func (s *Server) renegotiate(target session.ID) {
 	}
 }
 
+// indexTimeout bounds how long the picker waits on any single host. An
+// unreachable host must fail fast — the full dial timeout (often 10s) would
+// otherwise stall the interactive picker behind every dead device.
+const indexTimeout = 3 * time.Second
+
 // Projects indexes every up host on demand and returns the picker entries,
-// deduped by (host, root) (M9.8). Per-host errors are skipped, not fatal.
+// deduped by (host, root) (M9.8). Hosts are indexed concurrently with a short
+// per-host timeout so one slow or unreachable device can't hold up the picker;
+// per-host errors are skipped, not fatal.
 func (s *Server) Projects(ctx context.Context) ([]project.Project, error) {
-	seen := make(map[project.Key]struct{})
-	var out []project.Project
-	for _, h := range s.hosts.List() {
+	hosts := s.hosts.List()
+	results := make([][]project.Project, len(hosts)) // per-host, kept in host order
+
+	var wg sync.WaitGroup
+	for i, h := range hosts {
 		if h.Status == registry.StatusDown {
 			continue
 		}
-		projs, err := s.indexer.Index(ctx, h)
-		if err != nil {
-			continue // skip this host; don't fail the whole picker
-		}
+		wg.Add(1)
+		go func(i int, h registry.Host) {
+			defer wg.Done()
+			hctx, cancel := context.WithTimeout(ctx, indexTimeout)
+			defer cancel()
+			if projs, err := s.indexer.Index(hctx, h); err == nil {
+				results[i] = projs
+			}
+		}(i, h)
+	}
+	wg.Wait()
+
+	// Merge in host order so dedupe and output stay deterministic.
+	seen := make(map[project.Key]struct{})
+	var out []project.Project
+	for _, projs := range results {
 		for _, p := range projs {
 			k := project.KeyOf(p)
 			if _, dup := seen[k]; dup {

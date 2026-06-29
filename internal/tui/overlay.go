@@ -91,6 +91,58 @@ func (u *connUI) openRename() {
 	u.startOverlay(ov)
 }
 
+// openColorDevices lists every device so the user can recolor its sidebar
+// entry (prefix+k). Selecting a device opens the color choices for it.
+func (u *connUI) openColorDevices() {
+	ov := &overlay{title: "Color device — Enter to pick a device, Esc to cancel"}
+	for _, h := range u.t.hosts.List() {
+		h := h
+		r, g, b := u.t.deviceColor(h.ID)
+		label := fmt.Sprintf("%s %-12s %s", swatch(r, g, b), short(h.ID), h.Addr)
+		ov.entries = append(ov.entries, entry{
+			label:  label,
+			action: func() { u.openColorChoices(h.ID) },
+		})
+	}
+	if len(ov.entries) == 0 {
+		ov.title = "Color device — no devices registered (Esc to cancel)"
+	}
+	u.startOverlay(ov)
+}
+
+// openColorChoices lists the palette (plus "Auto") for one device, persisting
+// the pick to the registry so it survives reconnects and restarts.
+func (u *connUI) openColorChoices(id registry.HostID) {
+	ov := &overlay{title: fmt.Sprintf("Color for %s — Enter to apply, Esc to cancel", short(id))}
+	ov.entries = append(ov.entries, entry{
+		label:  "   Auto (derive from device id)",
+		action: func() { u.applyDeviceColor(id, "") },
+	})
+	for _, c := range hostPalette {
+		c := c
+		label := fmt.Sprintf("%s %s", swatch(c.r, c.g, c.b), c.name)
+		ov.entries = append(ov.entries, entry{
+			label:  label,
+			action: func() { u.applyDeviceColor(id, hexColor(c.r, c.g, c.b)) },
+		})
+	}
+	u.startOverlay(ov)
+}
+
+// applyDeviceColor persists a device's color and repaints so the sidebar
+// reflects it immediately.
+func (u *connUI) applyDeviceColor(id registry.HostID, color string) {
+	_ = u.t.hosts.SetColor(id, color)
+	u.signalRedraw()
+}
+
+// swatch renders a colored block used as a color preview in the picker. It
+// restores only the foreground (\x1b[39m) rather than a full reset so it does
+// not cancel the reverse-video highlight applied to a selected row.
+func swatch(r, g, b uint8) string {
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm██\x1b[39m", r, g, b)
+}
+
 func (u *connUI) startOverlay(ov *overlay) {
 	ov.refilter()
 	u.mu.Lock()

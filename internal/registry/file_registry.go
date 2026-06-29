@@ -161,6 +161,20 @@ func (r *fileRegistry) SetHome(id HostID, cfg HomeConfig) error {
 	return r.saveLocked()
 }
 
+// SetColor sets a host's sidebar color without touching other fields. An empty
+// color clears the override so the TUI auto-derives one again.
+func (r *fileRegistry) SetColor(id HostID, color string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.hosts[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	h.Color = color
+	r.hosts[id] = h
+	return r.saveLocked()
+}
+
 // SetStatus updates reachability + LastSeen without touching HomeConfig (M2.7).
 func (r *fileRegistry) SetStatus(id HostID, s Status) error {
 	r.mu.Lock()

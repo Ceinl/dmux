@@ -71,6 +71,8 @@ func (u *connUI) prefixEvent(ev keyboard.Event) (quit bool) {
 		u.openList()
 	case 'r', 'R':
 		u.openRename()
+	case 'k', 'K':
+		u.openColorDevices()
 	case 'c', 'C':
 		u.toggleSidebar()
 	case 'd', 'D':
@@ -148,6 +150,9 @@ func (u *connUI) render() {
 			u.scr.ShowCursor()
 		}
 	}
+
+	// Emit the whole buffered frame to the SSH channel in one write.
+	_ = u.out.Flush()
 }
 
 // handleResize re-sizes the screen to the interface's new window.
@@ -169,8 +174,13 @@ func (u *connUI) forceFullRepaint() {
 	u.signalRedraw()
 }
 
-// writeConn writes raw bytes straight to the interface (used by overlays).
-func (u *connUI) writeConn(b []byte) { _, _ = u.conn.Write(b) }
+// writeConn writes raw bytes to the interface (used by overlays). It goes
+// through the frame buffer and flushes immediately so the bytes appear at once
+// rather than as a flurry of tiny SSH packets.
+func (u *connUI) writeConn(b []byte) {
+	_, _ = u.out.Write(b)
+	_ = u.out.Flush()
+}
 func (u *connUI) writeString(s string) { u.writeConn([]byte(s)) }
 func (u *connUI) clear()                { u.writeString("\x1b[2J\x1b[H") }
 
